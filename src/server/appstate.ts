@@ -21,6 +21,13 @@ import { emptySong, makeId, type CueMark, type Song } from '../model/song.ts';
 import { ShowClock } from '../engine/showclock.ts';
 import { Scheduler, type CueHit, type FireRequest } from '../engine/scheduler.ts';
 import { analyze, renderCueSheet, type AnalysisReport } from '../engine/analyst.ts';
+import {
+  executeInjection,
+  planInjection,
+  type ExecuteOptions,
+  type InjectPlan,
+  type InjectResult,
+} from '../engine/injector.ts';
 import type { ShowInventory } from '../titan/providers/showreader.ts';
 
 export type ConnectionMode = 'offline' | 'sim' | 'live';
@@ -55,6 +62,8 @@ export interface AppSnapshot {
   recentHits: CueHit[];
   /** 最近一次结构体检结果（若有） */
   analysis: AnalysisReport | null;
+  /** 最近一次灌入结果（若有） */
+  inject: InjectResult | null;
 }
 
 export class AppState {
@@ -64,6 +73,7 @@ export class AppState {
   private reader: ShowReader | null = null;
   private lastInventory: ShowInventory | null = null;
   private lastReport: AnalysisReport | null = null;
+  private lastInject: InjectResult | null = null;
 
   private connection: ConnectionStatus = {
     mode: 'offline',
@@ -480,6 +490,39 @@ export class AppState {
     return renderCueSheet(this.lastInventory, title !== undefined ? { title } : {});
   }
 
+  // ── 批量灌入（R5） ──────────────────────────────────────────────────────
+
+  /**
+   * 生成灌入计划（无副作用）。
+   *
+   * 需求 R5.5「灌入前可预演」：先算清"将要创建什么"，确认后才执行。
+   * 需要先读取过控台现状，否则无法判断哪些落位已被占用。
+   */
+  async planInject(): Promise<InjectPlan> {
+    if (!this.reader) throw new Error('尚未连接控台 —— 灌入需要知道控台上现有的落位。');
+    if (!this.lastInventory) {
+      // 首次灌入前先做一次轻量读取
+      await this.analyzeShow({ maxCuesPerPlayback: 0 });
+    }
+    return planInjection(this.cueBank, this.lastInventory!);
+  }
+
+  /** 执行灌入。默认只灌结构（句柄/名称/时间），不灌灯光内容 —— 见 injector.ts 说明。 */
+  async runInject(plan: InjectPlan, options: ExecuteOptions = {}): Promise<InjectResult> {
+    if (!this.client) throw new Error('尚未连接控台');
+    const result = await executeInjection(this.client, this.cueBank, plan, options);
+    this.lastInject = result;
+    this.emit('inject-result', result);
+    // 灌入改变了控台现状 → 缓存失效
+    this.lastInventory = null;
+    this.lastReport = null;
+    return result;
+  }
+
+  get lastInjectResult(): InjectResult | null {
+    return this.lastInject;
+  }
+
   // ── 快照 ────────────────────────────────────────────────────────────────
 
   snapshot(): AppSnapshot {
@@ -500,6 +543,7 @@ export class AppState {
       stats: this.scheduler.stats(),
       recentHits: this.scheduler.hitLog.slice(-50),
       analysis: this.lastReport,
+      inject: this.lastInject,
     };
   }
 

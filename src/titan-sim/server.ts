@@ -282,11 +282,27 @@ export class TitanSim {
         return String(id);
       }
       case 'Handles/IsAllowedGroup':
-        return ['Playbacks', 'StaticPlaybacks', 'RollerA', 'RollerB'].includes(q('groupName') ?? '')
-          ? 'True'
-          : 'False';
+        return PLAYBACK_GROUPS.has(q('groupName') ?? '') ? 'True' : 'False';
       case 'Handles/IsClaimed':
         return 'False';
+      case 'Handles/SetGroupPage': {
+        const group = q('group') ?? '';
+        const page = Number(q('page'));
+        if (!Number.isFinite(page)) throw new Error(`Failed to parse value '${q('page')}' to TitanId`);
+        this.state.setPage(group, page);
+        this.state.log('page', `${group} 翻到第 ${page} 页`);
+        return null;
+      }
+      case 'Handles/ChangeRollerPage': {
+        // 滚轮翻页作用于 roller 相关分组
+        const page = Number(q('page'));
+        if (!Number.isFinite(page)) throw new Error(`Failed to parse value '${q('page')}' to TitanId`);
+        for (const g of ['Playbacks', 'RollerA', 'RollerB', 'StaticPlaybacks']) {
+          this.state.setPage(g, page);
+        }
+        this.state.log('page', `滚轮翻到第 ${page} 页`);
+        return null;
+      }
 
       // ── 散 cue 的触发 / 熄灭 ─────────────────────────────────────────
       case 'Playbacks/FirePlaybackAtLevel': {
@@ -406,8 +422,32 @@ export class TitanSim {
         const group = q('group') ?? '';
         const index = Number(q('index'));
         const updateOnly = isTrue(q('updateOnly'));
-        const pb = this.state.findPlaybackByLocation(group, 1, index);
-        if (!pb) throw new Error(`No handle in group '${group}' with index '${index}'`);
+
+        // 忠实复现：真实控台会拒绝把 playback 录到不允许的分组。
+        // 这正是 `Playbacks.IsAllowedGroup` 存在的理由 —— 录制前应当先校验。
+        if (!PLAYBACK_GROUPS.has(group)) {
+          throw new Error(
+            `Playbacks are not allowed to be recorded in group '${group}'. ` +
+              `（录制前应先用 Playbacks/IsAllowedGroup 校验候选分组名）`,
+          );
+        }
+
+        // ⚠️ 忠实复现真实行为：StoreCue **没有 page 参数**，
+        // 录到哪一页取决于控台**当前页**。要在指定页创建，必须先翻页。
+        const page = this.state.pageOf(group);
+
+        // 在**空句柄**上录制会**创建**该 playback（就像控台上按 RECORD 再推一个空推子）。
+        let pb = this.state.findPlaybackByLocation(group, page, index);
+        if (!pb) {
+          if (updateOnly) {
+            throw new Error(`No handle in group '${group}' with index '${index}'`);
+          }
+          pb = makeSimPlayback({ group, page, index }, `Playback ${index}`, {
+            kind: 'memory',
+          });
+          this.state.show.playbacks.set(pb.titanId, pb);
+          this.state.log('create', `${group} P${page}/${index} 新建句柄 titanId=${pb.titanId}`);
+        }
 
         const values = { ...this.state.show.programmer.values };
         if (updateOnly) {
@@ -447,11 +487,15 @@ export class TitanSim {
       case 'Playbacks/CueList/CreateCueList': {
         const group = q('group') ?? '';
         const index = Number(q('index'));
-        if (this.state.findPlaybackByLocation(group, 1, index)) {
+        if (!PLAYBACK_GROUPS.has(group)) {
+          throw new Error(`Playbacks are not allowed to be recorded in group '${group}'.`);
+        }
+        const page = this.state.pageOf(group);
+        if (this.state.findPlaybackByLocation(group, page, index)) {
           throw new Error(`Handle already occupied in group '${group}' index '${index}'`);
         }
         const pb = makeSimPlayback(
-          { group, page: 1, index },
+          { group, page, index },
           `CueList ${index}`,
           { kind: 'cuelist', userNumber: index },
         );
@@ -534,9 +578,7 @@ export class TitanSim {
 
       // ── 全局 ──────────────────────────────────────────────────────────
       case 'Playbacks/IsAllowedGroup':
-        return ['Playbacks', 'StaticPlaybacks', 'RollerA', 'RollerB'].includes(q('groupName') ?? '')
-          ? 'True'
-          : 'False';
+        return PLAYBACK_GROUPS.has(q('groupName') ?? '') ? 'True' : 'False';
       case 'Show/SaveAutoSave':
         this.state.log('save', '触发自动保存（模拟器不落盘）');
         return null;
@@ -728,6 +770,15 @@ async function readBody(req: IncomingMessage): Promise<string> {
 
 /** 毫秒 → 秒字符串（Titan 界面用秒）。至少保留一位小数以便区分 0 与极小值。 */
 const secs = (ms: number): string => (ms / 1000).toFixed(3).replace(/0+$/, '').replace(/\.$/, '.0');
+
+/** 允许承载 playback 的句柄分组（权威规范名）。 */
+const PLAYBACK_GROUPS = new Set([
+  'Playbacks',
+  'StaticPlaybacks',
+  'RollerA',
+  'RollerB',
+  'PlaybackWindow',
+]);
 
 const isTrue = (v: string | undefined): boolean => v !== undefined && /^(true|1)$/i.test(v);
 const clamp01 = (n: number): number => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 1);

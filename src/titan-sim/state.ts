@@ -440,6 +440,15 @@ export class SimState {
   /** 时间编辑器上下文 —— 见 TimesEditContext 的说明 */
   readonly timesEdit: TimesEditContext = { playbackTitanId: null, cueNumber: null };
 
+  /**
+   * 各分组的**当前页**。
+   *
+   * ⚠️ 这是复现一个真实 API 细节：`Playbacks.StoreCue(group, index, updateOnly)`
+   * **没有 page 参数** —— 录到哪一页取决于控台当前页。
+   * 因此要录到指定页，必须**先翻页**（`Handles.SetGroupPage` / `Handles.ChangeRollerPage`）。
+   */
+  readonly currentPage = new Map<string, number>();
+
   constructor(options: SimOptions = {}) {
     this.show = createSimShow(options);
     this.version = options.version ?? '16.0';
@@ -473,6 +482,14 @@ export class SimState {
       if (p.userNumber === n && (!group || p.group === group)) return p;
     }
     return undefined;
+  }
+
+  pageOf(group: string): number {
+    return this.currentPage.get(group) ?? 1;
+  }
+
+  setPage(group: string, page: number): void {
+    this.currentPage.set(group, page);
   }
 
   findPlaybackByLocation(group: string, page: number, index: number): SimPlayback | undefined {

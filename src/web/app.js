@@ -623,6 +623,7 @@ function renderAll() {
   renderRuler();
   renderStats();
   renderAnalysis();
+  renderInject();
   $('#selected-count').textContent = `已选 ${selectedCueIds.size} 个用于标记`;
 }
 
@@ -810,6 +811,131 @@ $('#song-select').addEventListener('change', async (ev) => {
     await post('/api/songs/load', { id: ev.target.value });
   } catch (e) {
     toast(e.message, 'error');
+  }
+});
+
+// ── 批量灌入 ──────────────────────────────────────────────────────────────
+
+let lastPlan = null;
+
+function renderInject() {
+  const root = $('#inject-result');
+  const result = state.inject;
+
+  if (result) {
+    const parts = [];
+    parts.push(`<div class="row" style="margin-top:12px">
+      <span class="badge ${result.ok ? 'ok' : 'bad'}">${result.ok ? '成功' : '失败'}</span>
+      <span class="badge">已执行 ${result.executed}</span>
+      <span class="badge">跳过 ${result.skipped}</span>
+      <span class="badge">耗时 ${(result.durationMs / 1000).toFixed(1)}s</span>
+      ${result.transactionToken ? '<span class="badge ok">已开撤销事务</span>' : '<span class="badge warn">事务不可用（无法一键回滚）</span>'}
+      ${result.rolledBack ? '<span class="badge warn">已自动回滚</span>' : ''}
+    </div>`);
+
+    if (result.verify) {
+      parts.push(`<p class="hint">执行后核对：期望 ${result.verify.expected} 个落位，控台上存在 ${result.verify.present} 个${
+        result.verify.missing.length ? `；未找到：${escapeHtml(result.verify.missing.join('、'))}` : ''
+      }</p>`);
+    }
+    if (result.failed.length > 0) {
+      parts.push(`<div class="card" style="border-color:var(--danger)">
+        <h3 style="margin-top:0">失败项</h3>
+        ${result.failed
+          .map(
+            (f) =>
+              `<div style="margin-bottom:8px"><b>${escapeHtml(f.description)}</b><br>
+               <span style="color:var(--danger);font-size:13px">${escapeHtml(f.error)}</span></div>`,
+          )
+          .join('')}
+      </div>`);
+    }
+    root.innerHTML = parts.join('');
+    return;
+  }
+
+  if (!lastPlan) {
+    root.innerHTML = '';
+    return;
+  }
+
+  const p = lastPlan;
+  const parts = [];
+  parts.push(`<h3>将要执行（${p.summary.total} 个动作）</h3>
+    <div class="stats" style="margin-bottom:12px">
+      <div class="stat"><div class="label">新建句柄</div><div class="value">${p.summary.create}</div></div>
+      <div class="stat"><div class="label">写名称</div><div class="value">${p.summary.legends}</div></div>
+      <div class="stat"><div class="label">写时间</div><div class="value">${p.summary.times}</div></div>
+      <div class="stat"><div class="label">需 programmer</div><div class="value">${p.summary.needsProgrammer}</div></div>
+    </div>`);
+
+  const conflictRows = p.conflicts
+    .map(
+      (c) => `<tr><td>${escapeHtml(c.where)}</td><td>${escapeHtml(c.cueName)}</td>
+        <td>${escapeHtml(c.existingLegend || '(空)')}</td></tr>`,
+    )
+    .join('');
+  if (p.conflicts.length > 0) {
+    parts.push(`<div class="card" style="border-color:var(--warn); padding:0">
+      <div style="padding:12px 14px 0"><b>落位冲突（${p.conflicts.length} 个）</b>
+      <p class="hint" style="margin:4px 0 8px">这些落位在控台上已被占用且名称不同。默认跳过，不覆盖现场。</p></div>
+      <table><thead><tr><th>落位</th><th>本库名称</th><th>控台现有名称</th></tr></thead>
+      <tbody>${conflictRows}</tbody></table></div>`);
+  }
+
+  parts.push(`<details style="margin-top:12px"><summary style="cursor:pointer;color:var(--fg-dim)">
+    展开全部 ${p.actions.length} 个动作</summary>
+    <div class="card" style="padding:0;margin-top:8px">
+    <table><tbody>${p.actions
+      .map(
+        (a) =>
+          `<tr><td class="mono" style="font-size:12px">${escapeHtml(a.kind)}</td>
+           <td>${escapeHtml(a.description)}</td></tr>`,
+      )
+      .join('')}</tbody></table></div></details>`);
+
+  if (p.warnings.length > 0) {
+    parts.push(`<ul style="color:var(--warn);font-size:13px;margin-top:10px">
+      ${p.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>`);
+  }
+
+  root.innerHTML = parts.join('');
+}
+
+$('#btn-inject-plan').addEventListener('click', async () => {
+  const btn = $('#btn-inject-plan');
+  btn.disabled = true;
+  try {
+    lastPlan = await post('/api/inject/plan', {});
+    $('#btn-inject-run').disabled = lastPlan.summary.total === 0;
+    renderInject();
+    toast(`计划已生成：${lastPlan.summary.total} 个动作`, 'ok');
+  } catch (e) {
+    toast(`生成计划失败：${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#btn-inject-run').addEventListener('click', async () => {
+  if (!lastPlan) return;
+  const n = lastPlan.summary.create;
+  if (!confirm(`确认执行灌入？\n\n将新建 ${n} 个句柄，共 ${lastPlan.summary.total} 个动作。\n全程包在撤销事务里，失败会自动回滚。`)) return;
+
+  const btn = $('#btn-inject-run');
+  btn.disabled = true;
+  try {
+    const result = await post('/api/inject/execute', {
+      plan: lastPlan,
+      overwriteConflicts: $('#inject-overwrite').checked,
+    });
+    state.inject = result;
+    renderInject();
+    toast(result.ok ? `灌入完成：${result.executed} 个动作` : '灌入失败，见下方详情', result.ok ? 'ok' : 'error');
+  } catch (e) {
+    toast(`灌入失败：${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
   }
 });
 

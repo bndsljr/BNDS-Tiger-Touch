@@ -97,6 +97,31 @@
           </div>
           <div id="marks-editor"></div>
         </div>
+
+        <!-- 批量灌入 -->
+        <div class="card">
+          <h3 style="margin-top: 0">④ 批量灌入到控台</h3>
+          <p class="hint" style="margin-top: 0">
+            把上面编好的散 cue 库生成到控台上：建句柄、写名称、写时间。
+            全程包在一个撤销事务里，失败可整批回滚。
+          </p>
+          <p class="hint" style="border-left: 3px solid var(--warn); padding-left: 10px">
+            <b>默认只灌结构，不灌灯光内容。</b>
+            因为 <code>StoreCue</code> 录的是 programmer 里的内容，而社区观测指出
+            WebAPI 在 Titan 里是「另一个用户」、有它自己的 programmer（**尚未在真机验证**）。
+            把"一定能做成的事"和"可能做不成的事"分开，整批操作的成功率才可预期。
+            灯光内容请先在控台上编好，或用盲编录制。
+          </p>
+          <div class="row">
+            <button class="btn" id="btn-inject-plan">① 生成计划（预演）</button>
+            <button class="btn primary" id="btn-inject-run" disabled>② 确认执行灌入</button>
+            <label class="field" style="flex-direction: row; align-items: center; gap: 6px">
+              <input type="checkbox" id="inject-overwrite" />
+              覆盖控台上已有的同名落位
+            </label>
+          </div>
+          <div id="inject-result"></div>
+        </div>
       </section>
 
       <!-- ══════════════ 演出域 ══════════════ -->

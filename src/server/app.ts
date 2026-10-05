@@ -16,6 +16,7 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { AppState } from './appstate.ts';
 import { emptySong, type CueMark, type Song } from '../model/song.ts';
 import { defaultTimes, makeCueId, nextFreePlacement, type ScatteredCue } from '../model/cuebank.ts';
+import type { ExecuteOptions } from '../engine/injector.ts';
 
 export interface AppServerOptions {
   port?: number;
@@ -297,6 +298,37 @@ export class AppServer {
       this.state.setSongOffset(b.id, b.offsetMs);
       return sendJson(res, 200, { ok: true });
     }
+    // ── 批量灌入（R5） ──────────────────────────────────────────────────
+    if (path === '/api/inject/plan' && method === 'POST') {
+      try {
+        return sendJson(res, 200, await this.state.planInject());
+      } catch (e) {
+        throw new HttpError(400, e instanceof Error ? e.message : String(e));
+      }
+    }
+    if (path === '/api/inject/execute' && method === 'POST') {
+      const b = (await ctx.body()) as { plan?: unknown } & ExecuteOptions;
+      if (!b.plan) throw new HttpError(400, '缺少 plan（请先调用 /api/inject/plan）');
+      try {
+        const result = await this.state.runInject(
+          b.plan as Parameters<typeof this.state.runInject>[0],
+          {
+            ...(b.withContent !== undefined ? { withContent: b.withContent } : {}),
+            ...(b.overwriteConflicts !== undefined
+              ? { overwriteConflicts: b.overwriteConflicts }
+              : {}),
+            ...(b.rollbackOnFailure !== undefined
+              ? { rollbackOnFailure: b.rollbackOnFailure }
+              : {}),
+            ...(b.dryRun !== undefined ? { dryRun: b.dryRun } : {}),
+          },
+        );
+        return sendJson(res, 200, result);
+      } catch (e) {
+        throw new HttpError(400, e instanceof Error ? e.message : String(e));
+      }
+    }
+
     // ── 分析（R2 结构体检） ─────────────────────────────────────────────
     if (path === '/api/analyze' && method === 'POST') {
       const b = (await ctx.body()) as { maxCuesPerPlayback?: number };
