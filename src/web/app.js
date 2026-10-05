@@ -13,6 +13,14 @@ const $ = (sel) => document.querySelector(sel);
 let state = null;
 let selectedCueIds = new Set();
 let firedRecently = new Map(); // cueId -> 时间戳，用于按钮反馈
+/**
+ * 播放头元素引用。
+ *
+ * ⚠️ 刻意缓存引用而不是每次 getElementById：
+ * 位置事件约 20Hz，每秒查 20 次 DOM 纯属浪费。
+ * （另外这也让"元素是否已创建"变成一个显式的 null 判断。）
+ */
+let playheadEl = null;
 
 // ── 工具 ──────────────────────────────────────────────────────────────────
 
@@ -461,6 +469,7 @@ function renderRuler() {
   const song = state.songs.find((s) => s.id === state.currentSongId);
   const ruler = $('#ruler');
   ruler.innerHTML = '';
+  playheadEl = null; // 旧元素已随 innerHTML 清空失效
   if (!song || song.durationMs <= 0) return;
 
   for (const mark of song.marks) {
@@ -476,6 +485,7 @@ function renderRuler() {
   head.id = 'playhead';
   head.style.left = '0%';
   ruler.append(head);
+  playheadEl = head;
 
   ruler.onclick = async (ev) => {
     const rect = ruler.getBoundingClientRect();
@@ -986,10 +996,9 @@ function connectEvents() {
     state.transport.positionMs = p.positionMs;
     state.transport.running = p.running;
     renderTransport();
-    const head = document.getElementById('playhead');
     const song = state.songs.find((s) => s.id === state.currentSongId);
-    if (head && song && song.durationMs > 0) {
-      head.style.left = `${Math.min(100, (p.positionMs / song.durationMs) * 100)}%`;
+    if (playheadEl && song && song.durationMs > 0) {
+      playheadEl.style.left = `${Math.min(100, (p.positionMs / song.durationMs) * 100)}%`;
     }
   });
 
@@ -1001,6 +1010,32 @@ function connectEvents() {
       firedRecently.delete(hit.cueId);
       renderPerformCueBank();
     }, 600);
+  });
+
+  // ★ 离线模式下推 cue 不会真的送到控台 —— 必须明确告知，否则操作者会以为推上去了
+  es.addEventListener('fire-offline', (ev) => {
+    const d = JSON.parse(ev.data);
+    const cue = cueName(d.cueId);
+    toast(`「${cue}」未送到控台：当前未连接（离线预演模式）`, 'error');
+  });
+
+  // 时钟发生硬重同步 = 播放位置跳了，操作者应当知道
+  es.addEventListener('clock-resync', (ev) => {
+    const d = JSON.parse(ev.data);
+    toast(`播放时钟已重同步（偏差 ${Math.round(d.driftMs)}ms）—— 卡点已重新武装`, 'error');
+  });
+
+  // 灌入结果（跨标签页/多操作者同步）
+  es.addEventListener('inject-result', () => {
+    void api('/api/state').then((st) => {
+      state = st;
+      renderInject();
+    });
+  });
+
+  es.addEventListener('resolved', (ev) => {
+    const d = JSON.parse(ev.data);
+    toast(`句柄解析完成：成功 ${d.resolved}，失败 ${d.failed.length}`, d.failed.length ? 'error' : 'ok');
   });
 
   es.addEventListener('analyze-progress', (ev) => {

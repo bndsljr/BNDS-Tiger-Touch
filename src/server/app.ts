@@ -383,12 +383,24 @@ export class AppServer {
 
     for (const [prefix, root] of roots) {
       if (!path.startsWith(prefix)) continue;
-      let rel = path.slice(prefix.length);
+
+      // ⚠️ 必须解码：`url.pathname` 仍是百分号编码的。
+      // 不解码的话，任何非 ASCII 文件名（例如全部中文的演出音频）
+      // 都会找不到文件而回退到 index.html —— 表现为"播放器拿到一坨 HTML"。
+      let rel: string;
+      try {
+        rel = decodeURIComponent(path.slice(prefix.length));
+      } catch {
+        continue; // 非法编码
+      }
       if (rel === '' || rel.endsWith('/')) rel += 'index.html';
-      // 防目录穿越：规范化后必须仍在 root 之内
+
+      // 防目录穿越：规范化后必须仍在 root 之内。
+      // 解码可能引入 `..` 或 `/`，因此这一步必须放在解码**之后**。
       const safe = normalize(rel).replace(/^(\.\.[/\\])+/, '');
+      if (safe.includes('..')) continue;
       const full = resolve(join(root, safe));
-      if (!full.startsWith(resolve(root))) continue;
+      if (full !== resolve(root) && !full.startsWith(resolve(root) + '/')) continue;
       try {
         const info = await stat(full);
         if (!info.isFile()) continue;

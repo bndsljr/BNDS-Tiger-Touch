@@ -1,11 +1,22 @@
 # 本地 API 文档语料库（用 tools/fetch_titan_api_docs.py 生成，不入库）
 .cache/
 
+# 演出音频与工程数据（体积大、且是现场素材，不入库）
+# 测试音频可用 tools/make_test_audio.py 重新生成
+data/
+!data/.gitkeep
+
+# 本地 show 数据（可能含真实演出内容）
+shows/
+
 # Node
 node_modules/
 dist/
 build/
 *.log
+
+# 临时脚本
+scratch/
 
 # Python
 __pycache__/
