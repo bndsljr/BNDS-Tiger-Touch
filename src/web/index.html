@@ -41,11 +41,19 @@
             <button class="btn primary" id="btn-connect">连接</button>
             <button class="btn" id="btn-sim">用本地模拟器</button>
             <button class="btn" id="btn-disconnect">断开</button>
+            <button class="btn primary" id="btn-diagnose">连接诊断</button>
           </div>
           <p class="hint" style="margin-bottom: 8px">
             未连接时一切照常可编辑、可预演，只是推 cue 不会真的送到控台。
           </p>
           <dl class="kv" id="conn-detail"></dl>
+          <p class="hint" style="margin-top: 10px">
+            <b>连接诊断</b>会一次性落实所有「文档没说、只能实测」的事项：
+            版本、序列号相关、批量句柄端点是否存在、以及实测
+            <code>levelDelta</code> 该用大写还是小写。
+            <b>全部探测均无副作用</b>（写类探测一律指向不存在的句柄），演出前/中都能安全运行。
+          </p>
+          <div id="diagnostics-result"></div>
         </div>
 
         <!-- 变光台 -->
@@ -83,10 +91,15 @@
               曲目
               <select id="song-select"></select>
             </label>
-            <label class="field" style="flex: 1 1 240px">
-              音频路径（相对 /audio/，可留空先排卡点）
-              <input id="song-audio" type="text" placeholder="序曲.mp3" />
+            <label class="field" style="flex: 1 1 260px">
+              音频文件（放在本机 data/ 目录）
+              <select id="song-audio"></select>
             </label>
+            <label class="field">
+              上传音频
+              <input type="file" id="audio-upload" accept="audio/*" style="font-size: 13px" />
+            </label>
+            <button class="btn" id="btn-audio-refresh">刷新列表</button>
             <label class="field">
               时长（秒）
               <input id="song-duration" type="number" min="0" step="1" style="width: 110px" />
@@ -179,9 +192,20 @@
           散 cue 台
           <span class="badge" id="selected-count">已选 0 个用于标记</span>
         </h3>
+        <div class="row" style="margin-bottom: 10px">
+          <label class="field" style="flex: 0 1 220px">
+            按标签筛选
+            <select id="cue-filter-tag"><option value="">全部</option></select>
+          </label>
+          <label class="field" style="flex: 0 1 180px">
+            只看某一页
+            <select id="cue-filter-page"><option value="">全部</option></select>
+          </label>
+          <span class="badge" id="cue-visible-count"></span>
+        </div>
         <p class="hint">
           单击 = 推起（触发）；再次单击同一 cue = 重新触发。
-          按住 Shift 单击 = 熄灭。在准备域勾选后可「在此刻标记」。
+          按住 Shift 单击 = 熄灭。长按 = 选中用于标记。
         </p>
         <div class="cue-pages" id="perform-cuebank"></div>
 

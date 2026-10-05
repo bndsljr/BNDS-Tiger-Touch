@@ -59,6 +59,7 @@ export {
   type Substitution,
 } from './substitutions.ts';
 
+export { diagnose, type DiagnosticCheck, type DiagnosticReport } from './diagnostics.ts';
 export { Playbacks, type PlaybackSummary } from './providers/playbacks.ts';
 export { Handles } from './providers/handles.ts';
 export {

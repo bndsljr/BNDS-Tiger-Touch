@@ -8,7 +8,7 @@
  * - 人工触发与调度触发**共用同一条 fire 通道**，因此行为一致、可统一记录。
  */
 
-import { TitanClient, Playbacks, Handles, ShowReader } from '../titan/index.ts';
+import { TitanClient, Playbacks, Handles, ShowReader, diagnose } from '../titan/index.ts';
 import type { HandleRef } from '../titan/handles.ts';
 import {
   allCues,
@@ -29,6 +29,7 @@ import {
   type InjectResult,
 } from '../engine/injector.ts';
 import type { ShowInventory } from '../titan/providers/showreader.ts';
+import type { DiagnosticReport } from '../titan/diagnostics.ts';
 
 export type ConnectionMode = 'offline' | 'sim' | 'live';
 
@@ -64,6 +65,8 @@ export interface AppSnapshot {
   analysis: AnalysisReport | null;
   /** 最近一次灌入结果（若有） */
   inject: InjectResult | null;
+  /** 最近一次连接诊断（若有） */
+  diagnostics: DiagnosticReport | null;
 }
 
 export class AppState {
@@ -74,6 +77,7 @@ export class AppState {
   private lastInventory: ShowInventory | null = null;
   private lastReport: AnalysisReport | null = null;
   private lastInject: InjectResult | null = null;
+  private lastDiagnostics: DiagnosticReport | null = null;
 
   private connection: ConnectionStatus = {
     mode: 'offline',
@@ -450,6 +454,27 @@ export class AppState {
     this.tickTimer = null;
   }
 
+  // ── 连接诊断 ────────────────────────────────────────────────────────────
+
+  get diagnostics(): DiagnosticReport | null {
+    return this.lastDiagnostics;
+  }
+
+  /**
+   * 连上控台后一次性落实所有"文档没说、只能实测"的事项。
+   *
+   * **所有探测均无副作用**（写类探测一律指向不存在的句柄），
+   * 因此可以在演出前、甚至演出中安全运行。
+   */
+  async runDiagnostics(): Promise<DiagnosticReport> {
+    if (!this.client) throw new Error('尚未连接控台');
+    this.emit('diagnose-progress', { message: '正在探测控台…' });
+    const report = await diagnose(this.client);
+    this.lastDiagnostics = report;
+    this.emit('diagnostics', report);
+    return report;
+  }
+
   // ── 分析（R2：结构体检） ────────────────────────────────────────────────
 
   get report(): AnalysisReport | null {
@@ -544,6 +569,7 @@ export class AppState {
       recentHits: this.scheduler.hitLog.slice(-50),
       analysis: this.lastReport,
       inject: this.lastInject,
+      diagnostics: this.lastDiagnostics,
     };
   }
 

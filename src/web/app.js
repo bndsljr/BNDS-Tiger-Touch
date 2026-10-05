@@ -21,6 +21,8 @@ let firedRecently = new Map(); // cueId -> 时间戳，用于按钮反馈
  * （另外这也让"元素是否已创建"变成一个显式的 null 判断。）
  */
 let playheadEl = null;
+/** 本机 data/ 目录里的音频文件列表 */
+let audioLibrary = [];
 
 // ── 工具 ──────────────────────────────────────────────────────────────────
 
@@ -118,15 +120,33 @@ function cuePlacementText(cue) {
 function renderPerformCueBank() {
   const root = $('#perform-cuebank');
   root.innerHTML = '';
-  const pages = state.cueBank.pages;
 
-  if (pages.every((p) => p.cues.length === 0)) {
+  const { tag, page: pageFilter } = activeCueFilters();
+  const matching = (cue) => !tag || (cue.tags ?? []).includes(tag);
+  const pages = state.cueBank.pages
+    .filter((p) => !pageFilter || String(p.page) === pageFilter)
+    .map((p) => ({ ...p, cues: p.cues.filter(matching) }))
+    .filter((p) => p.cues.length > 0);
+
+  const total = state.cueBank.pages.reduce((a, p) => a + p.cues.length, 0);
+  const shown = pages.reduce((a, p) => a + p.cues.length, 0);
+  const counter = $('#cue-visible-count');
+  if (counter) {
+    counter.textContent =
+      shown === total ? `共 ${total} 个` : `显示 ${shown} / ${total} 个`;
+    counter.className = shown === 0 && total > 0 ? 'badge warn' : 'badge';
+  }
+
+  if (total === 0) {
     root.innerHTML = '<div class="empty">散 cue 库是空的 —— 到「准备」域添加。</div>';
+    return;
+  }
+  if (pages.length === 0) {
+    root.innerHTML = '<div class="empty">当前筛选条件下没有散 cue —— 换一个标签或页。</div>';
     return;
   }
 
   for (const page of pages) {
-    if (page.cues.length === 0) continue;
     const wrap = document.createElement('div');
     wrap.className = 'cue-page';
 
@@ -357,7 +377,7 @@ function renderMarksEditor() {
     root.innerHTML = '<div class="empty">尚未选择曲目。</div>';
     return;
   }
-  $('#song-audio').value = song.audioPath ?? '';
+  renderAudioSelect(song.audioPath ?? '');
   $('#song-duration').value = Math.round((song.durationMs ?? 0) / 1000);
 
   if (song.marks.length === 0) {
@@ -439,6 +459,79 @@ async function saveSong(song) {
   } catch (e) {
     toast(e.message, 'error');
   }
+}
+
+// ── 音频库（音频放在运行本系统的电脑上，不在控台） ──────────────────────
+
+async function loadAudioLibrary() {
+  try {
+    audioLibrary = await api('/api/audio');
+  } catch {
+    audioLibrary = [];
+  }
+}
+
+function renderAudioSelect(current) {
+  const sel = $('#song-audio');
+  sel.innerHTML = '';
+
+  if (audioLibrary.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = '（data/ 目录里还没有音频 —— 用右边上传）';
+    sel.append(opt);
+  } else {
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = '（不使用音频，只按时钟推 cue）';
+    sel.append(none);
+    for (const a of audioLibrary) {
+      const opt = document.createElement('option');
+      opt.value = a.filename;
+      opt.textContent = `${a.filename}（${(a.bytes / 1024 / 1024).toFixed(1)} MB）`;
+      sel.append(opt);
+    }
+  }
+
+  // 当前选中的文件若不在库里（例如刚从别处拷来还没刷新），补一个占位项
+  if (current && !audioLibrary.some((a) => a.filename === current)) {
+    const opt = document.createElement('option');
+    opt.value = current;
+    opt.textContent = `${current}（未在 data/ 中找到）`;
+    sel.append(opt);
+  }
+  sel.value = current ?? '';
+}
+
+// ── 散 cue 筛选（三四十个 cue 时需要快速定位） ───────────────────────────
+
+function allBankCues() {
+  return state.cueBank.pages.flatMap((p) => p.cues.map((c) => ({ cue: c, page: p.page })));
+}
+
+function renderCueFilters() {
+  const tagSel = $('#cue-filter-tag');
+  const pageSel = $('#cue-filter-page');
+  const prevTag = tagSel.value;
+  const prevPage = pageSel.value;
+
+  const tags = [...new Set(allBankCues().flatMap((x) => x.cue.tags ?? []))].sort((a, b) =>
+    a.localeCompare(b, 'zh'),
+  );
+  tagSel.innerHTML =
+    '<option value="">全部</option>' +
+    tags.map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+  tagSel.value = tags.includes(prevTag) ? prevTag : '';
+
+  const pages = state.cueBank.pages.map((p) => p.page);
+  pageSel.innerHTML =
+    '<option value="">全部</option>' +
+    pages.map((n) => `<option value="${n}">第 ${n} 页</option>`).join('');
+  pageSel.value = pages.includes(Number(prevPage)) ? prevPage : '';
+}
+
+function activeCueFilters() {
+  return { tag: $('#cue-filter-tag').value, page: $('#cue-filter-page').value };
 }
 
 // ── 演出域渲染 ────────────────────────────────────────────────────────────
@@ -625,6 +718,7 @@ function renderAnalysis() {
 
 function renderAll() {
   renderHeader();
+  renderCueFilters();
   renderPerformCueBank();
   renderCueBankEditor();
   renderSongSelect();
@@ -634,6 +728,7 @@ function renderAll() {
   renderStats();
   renderAnalysis();
   renderInject();
+  renderDiagnostics();
   $('#selected-count').textContent = `已选 ${selectedCueIds.size} 个用于标记`;
 }
 
@@ -794,7 +889,7 @@ $('#btn-resolve').addEventListener('click', async () => {
 $('#btn-save-song').addEventListener('click', async () => {
   const song = state.songs.find((s) => s.id === state.currentSongId);
   if (!song) return toast('尚未选择曲目', 'error');
-  song.audioPath = $('#song-audio').value.trim();
+  song.audioPath = $('#song-audio').value;
   song.durationMs = Number($('#song-duration').value) * 1000;
   await saveSong(song);
   toast('曲目已保存', 'ok');
@@ -816,11 +911,119 @@ $('#btn-delete-song').addEventListener('click', async () => {
   toast('已删除', 'ok');
 });
 
+$('#btn-audio-refresh').addEventListener('click', async () => {
+  await loadAudioLibrary();
+  const song = state.songs.find((s) => s.id === state.currentSongId);
+  renderAudioSelect(song?.audioPath ?? '');
+  toast(`音频库已刷新：${audioLibrary.length} 个文件`, 'ok');
+});
+
+$('#audio-upload').addEventListener('change', async (ev) => {
+  const file = ev.target.files?.[0];
+  if (!file) return;
+  try {
+    const res = await fetch(`/api/audio?filename=${encodeURIComponent(file.name)}`, {
+      method: 'POST',
+      body: file,
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+    toast(`已上传：${body.filename}（${(body.bytes / 1024 / 1024).toFixed(1)} MB）`, 'ok');
+    await loadAudioLibrary();
+    const song = state.songs.find((s) => s.id === state.currentSongId);
+    if (song && !song.audioPath) {
+      song.audioPath = body.filename;
+      await saveSong(song);
+    }
+    renderAudioSelect(state.songs.find((s) => s.id === state.currentSongId)?.audioPath ?? '');
+  } catch (e) {
+    toast(`上传失败：${e.message}`, 'error');
+  } finally {
+    ev.target.value = '';
+  }
+});
+
+$('#cue-filter-tag').addEventListener('change', () => renderPerformCueBank());
+$('#cue-filter-page').addEventListener('change', () => renderPerformCueBank());
+
 $('#song-select').addEventListener('change', async (ev) => {
   try {
     await post('/api/songs/load', { id: ev.target.value });
   } catch (e) {
     toast(e.message, 'error');
+  }
+});
+
+// ── 连接诊断 ──────────────────────────────────────────────────────────────
+
+const DIAG_MARK = { ok: '✓', warn: '!', fail: '✗', skip: '–' };
+
+function renderDiagnostics() {
+  const root = $('#diagnostics-result');
+  const d = state.diagnostics;
+  if (!d) {
+    root.innerHTML = '';
+    return;
+  }
+  const parts = [];
+  parts.push(`<div class="row" style="margin-top:12px">
+    <span class="badge ${d.counts.fail ? 'bad' : d.counts.warn ? 'warn' : 'ok'}">
+      ${d.counts.fail ? '有严重问题' : d.counts.warn ? '有需注意项' : '全部通过'}
+    </span>
+    <span class="badge">✓ ${d.counts.ok}</span>
+    ${d.counts.warn ? `<span class="badge warn">! ${d.counts.warn}</span>` : ''}
+    ${d.counts.fail ? `<span class="badge bad">✗ ${d.counts.fail}</span>` : ''}
+    <span class="badge">${new Date(d.ranAt).toLocaleTimeString('zh-CN')}</span>
+  </div>`);
+
+  if (d.levelDeltaSpelling !== 'unknown') {
+    parts.push(`<p class="hint" style="margin-top:10px">
+      <b>实测结论：</b>levelDelta 拼写应为
+      <code>${d.levelDeltaSpelling === 'camel' ? 'level_levelDelta（大写 D）' : 'level_leveldelta（小写 d）'}</code>
+      —— 客户端${d.levelDeltaSpelling === 'camel' ? '默认值已正确' : '需改配置'}。
+    </p>`);
+  }
+
+  parts.push(`<table><tbody>${d.checks
+    .map(
+      (c) => `<tr>
+        <td style="width:1.4em;text-align:center" class="${
+          c.status === 'fail' ? 'lateness' : ''
+        }">${DIAG_MARK[c.status]}</td>
+        <td style="width:14em"><b>${escapeHtml(c.name)}</b></td>
+        <td style="font-size:13px;color:var(--fg-dim)">${escapeHtml(c.detail)
+          .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+          .replace(/`([^`]+)`/g, '<code>$1</code>')}</td>
+      </tr>`,
+    )
+    .join('')}</tbody></table>`);
+
+  if (d.rawNotes) {
+    parts.push(`<p class="hint">${escapeHtml(d.rawNotes)}</p>`);
+  }
+
+  root.innerHTML = parts.join('');
+}
+
+$('#btn-diagnose').addEventListener('click', async () => {
+  const btn = $('#btn-diagnose');
+  btn.disabled = true;
+  btn.textContent = '探测中…';
+  try {
+    const report = await post('/api/diagnose', {});
+    state.diagnostics = report;
+    renderDiagnostics();
+    toast(
+      report.counts.fail
+        ? `诊断发现 ${report.counts.fail} 个严重问题 —— 见下方`
+        : `诊断通过（${report.counts.ok} 项正常${report.counts.warn ? `，${report.counts.warn} 项需注意` : ''}）`,
+      report.counts.fail ? 'error' : 'ok',
+    );
+  } catch (e) {
+    toast(`诊断失败：${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '连接诊断';
   }
 });
 
@@ -1045,7 +1248,15 @@ function connectEvents() {
     badge.className = 'badge warn';
   });
 
-  for (const name of ['connection', 'cuebank', 'songs', 'song-loaded', 'marks', 'analysis']) {
+  for (const name of [
+    'connection',
+    'cuebank',
+    'songs',
+    'song-loaded',
+    'marks',
+    'analysis',
+    'diagnostics',
+  ]) {
     es.addEventListener(name, async () => {
       state = await api('/api/state');
       renderAll();
@@ -1088,6 +1299,7 @@ document.addEventListener('keydown', (ev) => {
   }
 });
 
+await loadAudioLibrary();
 state = await api('/api/state');
 renderAll();
 connectEvents();

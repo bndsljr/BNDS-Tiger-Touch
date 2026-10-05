@@ -11,7 +11,7 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { extname, join, normalize, resolve } from 'node:path';
 import { AppState } from './appstate.ts';
 import { emptySong, type CueMark, type Song } from '../model/song.ts';
@@ -298,6 +298,15 @@ export class AppServer {
       this.state.setSongOffset(b.id, b.offsetMs);
       return sendJson(res, 200, { ok: true });
     }
+    // ── 连接诊断 ────────────────────────────────────────────────────────
+    if (path === '/api/diagnose' && method === 'POST') {
+      try {
+        return sendJson(res, 200, await this.state.runDiagnostics());
+      } catch (e) {
+        throw new HttpError(400, e instanceof Error ? e.message : String(e));
+      }
+    }
+
     // ── 批量灌入（R5） ──────────────────────────────────────────────────
     if (path === '/api/inject/plan' && method === 'POST') {
       try {
@@ -358,6 +367,38 @@ export class AppServer {
     if (path === '/api/analyze/inventory' && method === 'GET') {
       if (!this.state.inventory) throw new HttpError(404, '还没有读取过 show');
       return sendJson(res, 200, this.state.inventory);
+    }
+
+    // ── 音频库 ──────────────────────────────────────────────────────────
+    // 音频放在**运行本系统的这台电脑**上（不在控台），浏览器经 /audio/ 播放。
+    if (path === '/api/audio' && method === 'GET') {
+      return sendJson(res, 200, await listAudio(this.options.dataRoot));
+    }
+
+    if (path === '/api/audio' && method === 'POST') {
+      const filename = ctx.url.searchParams.get('filename');
+      if (!filename) throw new HttpError(400, '缺少 filename 查询参数');
+      const safe = sanitizeAudioFilename(filename);
+      if (!safe) throw new HttpError(400, `文件名不合法：${filename}`);
+      if (!isAudioExtension(safe)) {
+        throw new HttpError(400, `不是支持的音频格式：${safe}（支持 mp3 / wav / m4a / ogg / flac / aac）`);
+      }
+      await mkdir(this.options.dataRoot, { recursive: true });
+      const dest = join(this.options.dataRoot, safe);
+      const data = await readBodyBuffer(ctx.req);
+      if (data.byteLength === 0) throw new HttpError(400, '请求体为空');
+      await writeFile(dest, data);
+      return sendJson(res, 200, { ok: true, filename: safe, bytes: data.byteLength });
+    }
+
+    if (path === '/api/audio' && method === 'DELETE') {
+      const filename = ctx.url.searchParams.get('filename');
+      if (!filename) throw new HttpError(400, '缺少 filename');
+      const safe = sanitizeAudioFilename(filename);
+      if (!safe || !isAudioExtension(safe)) throw new HttpError(400, '文件名不合法');
+      // 只允许删 dataRoot 下的音频，且不接受任何路径分隔符
+      await rm(join(this.options.dataRoot, safe), { force: true });
+      return sendJson(res, 200, { ok: true });
     }
 
     if (path === '/api/show/marks' && method === 'DELETE') {
@@ -444,6 +485,60 @@ function sendJson(res: ServerResponse, status: number, data: unknown): void {
     'Cache-Control': 'no-store',
   });
   res.end(body);
+}
+
+const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.opus']);
+
+function isAudioExtension(name: string): boolean {
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 && AUDIO_EXTENSIONS.has(name.slice(dot).toLowerCase());
+}
+
+/**
+ * 清洗上传文件名。
+ *
+ * 只保留基名，去掉任何路径成分与控制字符 ——
+ * 上传端是浏览器，不能信任它给的文件名。
+ * 中文名必须保留（演出音频几乎都是中文）。
+ */
+function sanitizeAudioFilename(raw: string): string | null {
+  // 取基名：同时处理 / 与 \（Windows 来源）
+  const base = raw.split(/[/\\]/).pop() ?? '';
+  const cleaned = base
+    .replace(/[\u0000-\u001f\u007f]/g, '') // 控制字符
+    .replace(/^[.\s]+/, '') // 前导点（隐藏文件 / ..）
+    .trim();
+  if (cleaned === '' || cleaned === '.' || cleaned === '..') return null;
+  if (cleaned.length > 200) return null;
+  return cleaned;
+}
+
+async function listAudio(root: string): Promise<
+  Array<{ filename: string; bytes: number; modifiedAt: number }>
+> {
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    const out: Array<{ filename: string; bytes: number; modifiedAt: number }> = [];
+    for (const e of entries) {
+      if (!e.isFile()) continue;
+      if (!isAudioExtension(e.name)) continue;
+      try {
+        const info = await stat(join(root, e.name));
+        out.push({ filename: e.name, bytes: info.size, modifiedAt: info.mtimeMs });
+      } catch {
+        /* 单个文件 stat 失败不影响整体列表 */
+      }
+    }
+    return out.sort((a, b) => a.filename.localeCompare(b.filename, 'zh'));
+  } catch {
+    return []; // dataRoot 还不存在时视为空库
+  }
+}
+
+async function readBodyBuffer(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const c of req) chunks.push(c as Buffer);
+  return Buffer.concat(chunks);
 }
 
 const MIME: Record<string, string> = {
