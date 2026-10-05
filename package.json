@@ -1,0 +1,22 @@
+{
+  "name": "bnds-tiger-touch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BNDS 剧场灯光控制系统 —— Avolites Tiger Touch (Titan WebAPI) 编光/变光/演出一体化工具",
+  "type": "module",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "scripts": {
+    "dev": "node --watch src/main.ts",
+    "start": "node src/main.ts",
+    "sim": "node src/titan-sim/standalone.ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "probe": "node src/cli/probe.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0"
+  }
+}
