@@ -61,3 +61,14 @@ export {
 
 export { Playbacks, type PlaybackSummary } from './providers/playbacks.ts';
 export { Handles } from './providers/handles.ts';
+export {
+  ShowReader,
+  secondsToMs,
+  type CueInfo,
+  type FixtureInfo,
+  type GroupInfo,
+  type PaletteInfo,
+  type PlaybackInfo,
+  type ReadInventoryOptions,
+  type ShowInventory,
+} from './providers/showreader.ts';

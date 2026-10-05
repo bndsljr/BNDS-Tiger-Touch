@@ -62,7 +62,7 @@ export type ParamValue =
   | null
   | undefined
   | readonly (string | number)[]
-  | { handle: import('./handles.ts').HandleRef }
+  | import('./handles.ts').HandleRef
   | { toQuery: () => Record<string, string> };
 
 /**
@@ -92,8 +92,8 @@ export function encodeParams(
     }
 
     // Handle → 展开为 <name>_titanId / _userNumber / _location
-    if (isHandleWrapper(raw)) {
-      Object.assign(out, encodeHandleInto(name, raw.handle));
+    if (isHandleRef(raw)) {
+      Object.assign(out, encodeHandleInto(name, raw));
       continue;
     }
 
@@ -134,8 +134,15 @@ function encodeHandleInto(prefix: string, ref: import('./handles.ts').HandleRef)
   return { [`${prefix}_location`]: `${group}_${page}_${index}` };
 }
 
-export function handle(ref: import('./handles.ts').HandleRef): ParamValue {
-  return { handle: ref };
+/**
+ * 可读性辅助 —— 恒等函数。
+ *
+ * 句柄本可直接传，这里保留 `handle(ref)` 只是让调用点更醒目：
+ * `{ handle: handle({ titanId: 5 }) }` 比 `{ handle: { titanId: 5 } }` 更易读，
+ * 且在被重构时更容易被搜到。两者编码结果完全相同。
+ */
+export function handle(ref: import('./handles.ts').HandleRef): import('./handles.ts').HandleRef {
+  return ref;
 }
 
 export function handleList(
@@ -168,8 +175,17 @@ function isLevelAdjust(v: unknown): v is LevelAdjust {
   );
 }
 
-function isHandleWrapper(v: unknown): v is { handle: import('./handles.ts').HandleRef } {
-  return typeof v === 'object' && v !== null && 'handle' in v && !('toQuery' in v);
+/**
+ * 识别句柄引用。
+ *
+ * 设计说明：句柄**直接**作为参数值传入即可 —— `{ handle: { titanId: 5 } }`，
+ * 编码时用**参数名**作为前缀，因此 `{ playback: { titanId: 5 } }` → `playback_titanId=5`。
+ * 不需要额外的包装层（早期版本要求 `{ handle: { handle: ref } }`，既啰嗦又易错）。
+ */
+function isHandleRef(v: unknown): v is import('./handles.ts').HandleRef {
+  if (typeof v !== 'object' || v === null) return false;
+  if ('toQuery' in v) return false;
+  return 'titanId' in v || 'userNumber' in v || 'location' in v;
 }
 
 function isQueryable(v: unknown): v is { toQuery: () => Record<string, string> } {

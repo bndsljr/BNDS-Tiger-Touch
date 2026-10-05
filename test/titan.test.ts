@@ -40,12 +40,18 @@ after(async () => {
 
 const client = (): TitanClient => new TitanClient({ baseUrl: base });
 
-/** 取模拟器中第一个 playback 的真实 titanId —— 避免测试里硬编码 id。 */
-const firstPlaybackTitanId = (): number => {
-  const first = [...sim.state.show.playbacks.values()][0];
-  assert.ok(first, '模拟器应预置至少一个 playback');
-  return first.titanId;
+/** 取模拟器中的回放，避免测试硬编码 id / userNumber（种子内容会演进）。 */
+const playbackAt = (n: number) => {
+  const list = [...sim.state.show.playbacks.values()];
+  const pb = list[n];
+  assert.ok(pb, `模拟器应至少预置 ${n + 1} 个 playback`);
+  return pb;
 };
+
+const firstPlaybackTitanId = (): number => playbackAt(0).titanId;
+
+/** 按序号取一个回放的句柄引用（用 userNumber，顺带验证该寻址方式）。 */
+const refAt = (n: number) => ({ userNumber: playbackAt(n).userNumber });
 
 // ─────────────────────────────────────────────────────────────────────────
 
@@ -104,7 +110,7 @@ describe('传输层', () => {
 
 describe('💣 levelDelta 大小写地雷', () => {
   it('客户端默认发大写 D 的 levelDelta', () => {
-    const q = encodeParams({ srcHandle: { handle: { titanId: 1000 } }, level: levelDelta(0.2) });
+    const q = encodeParams({ srcHandle: { titanId: 1000 }, level: levelDelta(0.2) });
     assert.equal(q['level_levelDelta'], '0.2');
     assert.equal(q['level_leveldelta'], undefined);
   });
@@ -143,14 +149,10 @@ describe('💣 levelDelta 大小写地雷', () => {
 
 describe('句柄寻址', () => {
   it('三种显式后缀各自编码正确', () => {
-    assert.deepEqual(encodeParams({ handle: { handle: { titanId: 1895 } } }), {
-      handle_titanId: '1895',
-    });
-    assert.deepEqual(encodeParams({ handle: { handle: { userNumber: 6 } } }), {
-      handle_userNumber: '6',
-    });
+    assert.deepEqual(encodeParams({ handle: { titanId: 1895 } }), { handle_titanId: '1895' });
+    assert.deepEqual(encodeParams({ handle: refAt(5) }), { handle_userNumber: '6' });
     assert.deepEqual(
-      encodeParams({ handle: { handle: { location: { group: 'Playbacks', page: 2, index: 1 } } } }),
+      encodeParams({ handle: { location: { group: 'Playbacks', page: 2, index: 1 } } }),
       { handle_location: 'Playbacks_2_1' },
     );
   });
@@ -159,7 +161,7 @@ describe('句柄寻址', () => {
     assert.deepEqual(encodeParams({ handles: handleList([{ titanId: 1 }, { titanId: 2 }]) }), {
       handleList_handleList: '1,2',
     });
-    assert.throws(() => encodeParams({ handles: handleList([{ titanId: 1 }, { userNumber: 2 }]) }));
+    assert.throws(() => encodeParams({ handles: handleList([{ titanId: 1 }, refAt(1)]) }));
   });
 
   it('缺省 handle= 遇到 location 会报 AcwUserNumber 解析错误（真实行为）', async () => {
@@ -171,7 +173,7 @@ describe('句柄寻址', () => {
 
   it('Handles.GetGroup 回读分组名 —— 官方 bootstrap', async () => {
     const h = new Handles(client());
-    const group = await h.getGroup({ userNumber: 1 });
+    const group = await h.getGroup(refAt(0));
     assert.equal(group, 'Playbacks');
   });
 
@@ -186,7 +188,7 @@ describe('句柄寻址', () => {
 describe('散 cue 的触发 / 熄灭（operate —— 本项目核心）', () => {
   it('按 userNumber 触发并读到激活状态', async () => {
     const pb = new Playbacks(client());
-    await pb.fireAtLevel({ userNumber: 1 }, 1);
+    await pb.fireAtLevel(refAt(0), 1);
     const state = sim.state.findPlaybackByUserNumber(1);
     assert.equal(state?.active, true);
     assert.equal(state?.level, 1);
@@ -194,8 +196,8 @@ describe('散 cue 的触发 / 熄灭（operate —— 本项目核心）', () =>
 
   it('alwaysRefire 会先熄灭再触发', async () => {
     const pb = new Playbacks(client());
-    await pb.fireAtLevel({ userNumber: 2 }, 1);
-    await pb.fireAtLevel({ userNumber: 2 }, 0.5, true);
+    await pb.fireAtLevel(refAt(1), 1);
+    await pb.fireAtLevel(refAt(1), 0.5, true);
     const state = sim.state.findPlaybackByUserNumber(2);
     assert.equal(state?.level, 0.5);
     assert.equal(state?.active, true);
@@ -203,15 +205,15 @@ describe('散 cue 的触发 / 熄灭（operate —— 本项目核心）', () =>
 
   it('熄灭后不再激活', async () => {
     const pb = new Playbacks(client());
-    await pb.fireAtLevel({ userNumber: 3 }, 1);
-    await pb.kill({ userNumber: 3 });
+    await pb.fireAtLevel(refAt(2), 1);
+    await pb.kill(refAt(2));
     assert.equal(sim.state.findPlaybackByUserNumber(3)?.active, false);
   });
 
   it('KillAll 熄灭全部 —— 演出紧急操作', async () => {
     const pb = new Playbacks(client());
-    await pb.fireAtLevel({ userNumber: 1 }, 1);
-    await pb.fireAtLevel({ userNumber: 4 }, 1);
+    await pb.fireAtLevel(refAt(0), 1);
+    await pb.fireAtLevel(refAt(3), 1);
     await pb.killAll();
     const anyActive = [...sim.state.show.playbacks.values()].some((p) => p.active);
     assert.equal(anyActive, false);
@@ -219,15 +221,15 @@ describe('散 cue 的触发 / 熄灭（operate —— 本项目核心）', () =>
 
   it('读到 cue 结构（元数据可读，数值不可读）', async () => {
     const pb = new Playbacks(client());
-    const ids = await pb.getCueIds({ userNumber: 1 });
+    const ids = await pb.getCueIds(refAt(0));
     assert.equal(ids.length, 1);
-    assert.equal(await pb.doesCueExist({ userNumber: 1 }, 1), true);
-    assert.equal(await pb.doesCueExist({ userNumber: 1 }, 99), false);
+    assert.equal(await pb.doesCueExist(refAt(0), 1), true);
+    assert.equal(await pb.doesCueExist(refAt(0), 99), false);
   });
 
   it('SetCueLegend 显式寻址，无需上下文', async () => {
     const pb = new Playbacks(client());
-    await pb.setCueLegend({ userNumber: 4 }, 1, '谢幕');
+    await pb.setCueLegend(refAt(3), 1, '谢幕');
     assert.equal(sim.state.findPlaybackByUserNumber(4)?.legend, '谢幕');
   });
 

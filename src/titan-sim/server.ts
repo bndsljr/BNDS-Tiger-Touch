@@ -17,7 +17,13 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { HANDLE_GROUPS } from '../titan/handles.ts';
-import { SimState, type SimOptions, type SimPlayback } from './state.ts';
+import {
+  SimState,
+  makeSimCue,
+  makeSimPlayback,
+  type SimOptions,
+  type SimPlayback,
+} from './state.ts';
 
 export interface SimServerOptions extends SimOptions {
   port?: number;
@@ -152,7 +158,62 @@ export class TitanSim {
         return '0';
       case 'Playbacks/TimesEdit/PlaybackName':
         return '';
+      // ── `Playbacks/Editor/Times/*` ────────────────────────────────────
+      //
+      // 这些是读取 cue 元数据的**唯一**路径。全部是单例作用域：
+      // 读到的是"当前上下文 cue"（由 TimesEdit/CueNumber + FillTimes 设定）。
+      //
+      // ⚠️ 单位存疑：真实控台返回的 fade/delay 是**秒**还是**毫秒**，文档未说明。
+      // 本模拟器返回**秒**（如 "3.0"），与 Titan 界面观感一致；
+      // 客户端按"能解析成小数即视为秒"处理，并把原始字符串保留在诊断信息里。
+      // 连真控台时须实测（列入 §10.1 验证清单）。
       case 'Playbacks/Editor/Times/CueLegend':
+        return this.timesProp((c) => c.legend) ?? '';
+      case 'Playbacks/Editor/Times/CueFadeInTime':
+        return this.timesProp((c) => secs(c.fadeInMs)) ?? '0';
+      case 'Playbacks/Editor/Times/CueFadeOutTime':
+        return this.timesProp((c) => secs(c.fadeOutMs)) ?? '0';
+      case 'Playbacks/Editor/Times/CueDelayInTime':
+        return this.timesProp((c) => secs(c.delayMs)) ?? '0';
+      case 'Playbacks/Editor/Times/CueDelayOutTime':
+        return this.timesProp((c) => secs(c.delayOutMs)) ?? '0';
+      case 'Playbacks/Editor/Times/CueLink':
+        return this.timesProp((c) => (c.link ? 'True' : 'False')) ?? 'False';
+      case 'Playbacks/Editor/Times/CueLinkOffset':
+        return this.timesProp((c) => secs(c.linkOffsetMs)) ?? '0';
+      case 'Playbacks/Editor/Times/CueLinkOffsetType':
+        return 'WaitForGo';
+      case 'Playbacks/Editor/Times/CueMoveInDark':
+        return this.timesProp((c) => (c.moveInDark ? 'True' : 'False')) ?? 'False';
+      case 'Playbacks/Editor/Times/CueTracking':
+        return this.timesProp((c) => c.tracking) ?? 'Global';
+      case 'Playbacks/Editor/Times/CueNotes':
+        return this.timesProp((c) => c.notes) ?? '';
+      case 'Playbacks/Editor/Times/CueMode':
+        return 'Cue';
+      case 'Playbacks/Editor/Times/CuePreload':
+        return 'False';
+      case 'Playbacks/Editor/Times/CueCurve':
+        return 'Line';
+      case 'Playbacks/Editor/Times/CueSpeedMultiplier':
+        return '1';
+      case 'Playbacks/Editor/Times/CueFixtureOverlap':
+        return '100';
+      case 'Playbacks/Editor/Times/PlaybackReleaseTime': {
+        // playback 级属性，不依赖 cue 上下文
+        const { playbackTitanId } = this.state.timesEdit;
+        const pb = playbackTitanId === null ? null : this.state.show.playbacks.get(playbackTitanId);
+        return secs(pb?.releaseTimeMs ?? 0);
+      }
+      case 'Playbacks/Editor/Times/PlaybackSpeed':
+        return '1';
+      case 'Playbacks/Editor/Times/Disabled':
+        return 'False';
+      case 'Playbacks/Editor/Times/ActiveControlTime':
+        return 'CueFadeInTime';
+      case 'Playbacks/Editor/Times/AttributeList':
+        return '';
+      case 'Playbacks/Editor/Times/CaptionText':
         return '';
       default:
         throw new Error(
@@ -181,8 +242,13 @@ export class TitanSim {
         // 真实语义：只是"拟定的保存名"，**不落盘**
         this.state.log('set', `SaveShowName -> ${value}（仅拟定，未落盘）`);
         return null;
-      case 'Playbacks/TimesEdit/CueNumber':
+      case 'Playbacks/TimesEdit/CueNumber': {
+        // 时间是"选中哪个 cue"的上下文设置，后续 FillTimes 会补齐 playback
+        const n = Number(value);
+        if (!Number.isFinite(n)) throw new Error(`Failed to parse value '${value}' to Single`);
+        this.state.timesEdit.cueNumber = n;
         return null;
+      }
       case 'Timecode/Enabled':
         return null;
       default:
@@ -308,6 +374,33 @@ export class TitanSim {
       case 'Playbacks/IsCueHandle':
         return 'True';
 
+      // ── 读取 cue 元数据的唯一路径（文档所限） ─────────────────────────
+      //
+      // ⚠️ 忠实复现真实 API 的两个难用之处：
+      //  1. `Playbacks/Editor/Times/*` 是**单例作用域**属性，读的是"当前上下文 cue"。
+      //     导出一条完整 cue list 必须循环：设 CueNumber → FillTimes → 读属性。
+      //     复杂度 O(cues) 次 HTTP 往返。
+      //  2. 这个循环**会改动控台操作员的 UI 状态**（移动其时间编辑器选中项）。
+      case 'Playbacks/TimesEdit/FillTimes': {
+        const pb = this.resolvePlayback(query, 'handle');
+        if (this.state.timesEdit.cueNumber === null && pb.cues.length > 0) {
+          this.state.timesEdit.cueNumber = pb.cues[0]!.cueNumber;
+        }
+        this.state.timesEdit.playbackTitanId = pb.titanId;
+        return null;
+      }
+      case 'Playbacks/Editor/GetLiveCue': {
+        const pb = this.resolvePlayback(query, 'handle');
+        const live = pb.cues.find((c) => c.cueNumber === 1) ?? pb.cues[0];
+        return live ? String(live.cueId) : '0';
+      }
+      case 'Playbacks/GetPlaybackHandle': {
+        const id = Number(q('playbackId'));
+        const pb = this.state.show.playbacks.get(id);
+        if (!pb) throw new Error(`No playback with id '${id}'`);
+        return String(pb.titanId);
+      }
+
       // ── 录制散 cue（依赖 programmer） ─────────────────────────────────
       case 'Playbacks/StoreCue': {
         const group = q('group') ?? '';
@@ -325,18 +418,10 @@ export class TitanSim {
           return last.cueId;
         }
         const cueNumber = pb.cues.length + 1;
-        const cueId = 90_000 + pb.titanId * 10 + cueNumber;
-        pb.cues.push({
-          cueId,
-          cueNumber,
-          legend: pb.legend,
-          fadeInMs: 0,
-          fadeOutMs: 0,
-          delayMs: 0,
-          values,
-        });
+        const cue = makeSimCue(cueNumber, pb.legend, { values });
+        pb.cues.push(cue);
         this.state.log('store', `${pb.legend} 录制 cue ${cueNumber}`);
-        return cueId;
+        return cue.cueId;
       }
       case 'Playbacks/SetCueLegend': {
         const pb = this.resolvePlayback(query, 'handle');
@@ -365,22 +450,13 @@ export class TitanSim {
         if (this.state.findPlaybackByLocation(group, 1, index)) {
           throw new Error(`Handle already occupied in group '${group}' index '${index}'`);
         }
-        const id = 80_000 + index;
-        this.state.show.playbacks.set(id, {
-          titanId: id,
-          userNumber: index,
-          group,
-          page: 1,
-          index,
-          legend: `CueList ${index}`,
-          cues: [],
-          level: -1,
-          active: false,
-          paused: false,
-          fadeOutMs: 0,
-          fixtureOverlap: 100,
-        });
-        return id;
+        const pb = makeSimPlayback(
+          { group, page: 1, index },
+          `CueList ${index}`,
+          { kind: 'cuelist', userNumber: index },
+        );
+        this.state.show.playbacks.set(pb.titanId, pb);
+        return pb.titanId;
       }
       case 'Group/QuickCreateGroup': {
         const legend = q('legend') ?? `Group ${this.state.show.groups.size + 1}`;
@@ -471,6 +547,13 @@ export class TitanSim {
             `若项目需要该能力，请在 src/titan-sim/server.ts 的 doScript 中补充。`,
         );
     }
+  }
+
+  /** 读取当前上下文 cue 的某个属性。无上下文 cue 时返回 null。 */
+  private timesProp<T>(read: (cue: import('./state.ts').SimCue) => T): T | null {
+    const ctx = this.state.contextCue();
+    if (!ctx) return null;
+    return read(ctx.cue);
   }
 
   // ── 句柄解析（复现真实的寻址陷阱） ───────────────────────────────────────
@@ -642,6 +725,9 @@ async function readBody(req: IncomingMessage): Promise<string> {
   for await (const chunk of req) chunks.push(chunk as Buffer);
   return Buffer.concat(chunks).toString('utf8');
 }
+
+/** 毫秒 → 秒字符串（Titan 界面用秒）。至少保留一位小数以便区分 0 与极小值。 */
+const secs = (ms: number): string => (ms / 1000).toFixed(3).replace(/0+$/, '').replace(/\.$/, '.0');
 
 const isTrue = (v: string | undefined): boolean => v !== undefined && /^(true|1)$/i.test(v);
 const clamp01 = (n: number): number => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 1);

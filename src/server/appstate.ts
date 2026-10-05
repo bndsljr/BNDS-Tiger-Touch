@@ -8,7 +8,7 @@
  * - 人工触发与调度触发**共用同一条 fire 通道**，因此行为一致、可统一记录。
  */
 
-import { TitanClient, Playbacks, Handles } from '../titan/index.ts';
+import { TitanClient, Playbacks, Handles, ShowReader } from '../titan/index.ts';
 import type { HandleRef } from '../titan/handles.ts';
 import {
   allCues,
@@ -20,6 +20,8 @@ import {
 import { emptySong, makeId, type CueMark, type Song } from '../model/song.ts';
 import { ShowClock } from '../engine/showclock.ts';
 import { Scheduler, type CueHit, type FireRequest } from '../engine/scheduler.ts';
+import { analyze, renderCueSheet, type AnalysisReport } from '../engine/analyst.ts';
+import type { ShowInventory } from '../titan/providers/showreader.ts';
 
 export type ConnectionMode = 'offline' | 'sim' | 'live';
 
@@ -51,12 +53,17 @@ export interface AppSnapshot {
   stats: ReturnType<Scheduler['stats']>;
   /** 最近若干次触发，供演出页与复盘页展示 */
   recentHits: CueHit[];
+  /** 最近一次结构体检结果（若有） */
+  analysis: AnalysisReport | null;
 }
 
 export class AppState {
   private client: TitanClient | null = null;
   private playbacks: Playbacks | null = null;
   private handles: Handles | null = null;
+  private reader: ShowReader | null = null;
+  private lastInventory: ShowInventory | null = null;
+  private lastReport: AnalysisReport | null = null;
 
   private connection: ConnectionStatus = {
     mode: 'offline',
@@ -131,6 +138,9 @@ export class AppState {
       this.client = client;
       this.playbacks = new Playbacks(client);
       this.handles = new Handles(client);
+      this.reader = new ShowReader(client);
+      this.lastInventory = null;
+      this.lastReport = null;
       this.titanIdCache.clear();
       this.connection = {
         mode: baseUrl.includes('127.0.0.1') || baseUrl.includes('localhost') ? 'sim' : 'live',
@@ -158,6 +168,9 @@ export class AppState {
     this.client = null;
     this.playbacks = null;
     this.handles = null;
+    this.reader = null;
+    this.lastInventory = null;
+    this.lastReport = null;
     this.titanIdCache.clear();
     this.connection = {
       mode: 'offline',
@@ -427,6 +440,46 @@ export class AppState {
     this.tickTimer = null;
   }
 
+  // ── 分析（R2：结构体检） ────────────────────────────────────────────────
+
+  get report(): AnalysisReport | null {
+    return this.lastReport;
+  }
+
+  get inventory(): ShowInventory | null {
+    return this.lastInventory;
+  }
+
+  /**
+   * 读取控台现有 show 并做结构体检。
+   *
+   * ⚠️ 代价与副作用（必须让使用者知道）：
+   * - 逐 cue 读元数据是 O(cues) × 每次 8 次 HTTP 往返
+   * - 且**会改动控台操作员的时间编辑器选中项**
+   * → 应在非演出时段运行；演出域不提供此入口。
+   */
+  async analyzeShow(opts: { maxCuesPerPlayback?: number } = {}): Promise<AnalysisReport> {
+    if (!this.reader) throw new Error('尚未连接控台 —— 分析需要读取控台上的 show。');
+    this.emit('analyze-progress', { phase: 'reading', message: '正在读取 show 结构…' });
+    const inventory = await this.reader.readInventory(
+      opts.maxCuesPerPlayback !== undefined ? { maxCuesPerPlayback: opts.maxCuesPerPlayback } : {},
+    );
+    this.lastInventory = inventory;
+    this.emit('analyze-progress', { phase: 'analyzing', message: '正在分析…' });
+    const report = analyze(inventory);
+    this.lastReport = report;
+    this.emit('analysis', report);
+    return report;
+  }
+
+  /** 生成中文提示本（Markdown）。 */
+  cueSheetMarkdown(title?: string): string {
+    if (!this.lastInventory) {
+      throw new Error('还没有读取过 show —— 请先点「读取并体检」。');
+    }
+    return renderCueSheet(this.lastInventory, title !== undefined ? { title } : {});
+  }
+
   // ── 快照 ────────────────────────────────────────────────────────────────
 
   snapshot(): AppSnapshot {
@@ -446,6 +499,7 @@ export class AppState {
       },
       stats: this.scheduler.stats(),
       recentHits: this.scheduler.hitLog.slice(-50),
+      analysis: this.lastReport,
     };
   }
 

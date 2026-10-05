@@ -178,6 +178,30 @@
 
         <div class="stats" id="stats"></div>
 
+        <!-- 结构体检（R2） -->
+        <h3>现有程序结构体检</h3>
+        <div class="card">
+          <p class="hint" style="margin-top: 0">
+            读取控台上现有 show 的<b>结构与元数据</b>，找出命名、编号、时间、备注层面的问题。
+          </p>
+          <p class="hint" style="border-left: 3px solid var(--warn); padding-left: 10px">
+            <b>能力边界：</b>读不到 cue 内的属性数值（亮度/颜色/位置）——这是 Titan WebAPI 的硬限制。
+            所以本体检<b>不做</b>「灯光内容是否合理」的判断，那些需要离线解析 show 文件或外部抓 DMX。
+            另外逐 cue 读取会<b>改动控台操作员的时间编辑器选中项</b>，请在非演出时段运行。
+          </p>
+          <div class="row">
+            <label class="field">
+              每个回放最多读
+              <input id="analyze-max-cues" type="number" value="60" min="1" max="500" style="width: 100px" />
+            </label>
+            <button class="btn primary" id="btn-analyze">读取并体检</button>
+            <button class="btn" id="btn-cuesheet" disabled>下载提示本（Markdown）</button>
+            <span class="badge" id="analyze-progress"></span>
+          </div>
+        </div>
+
+        <div id="analysis-result"></div>
+
         <h3>触发记录</h3>
         <div class="card" style="padding: 0">
           <table>

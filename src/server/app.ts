@@ -133,7 +133,7 @@ export class AppServer {
     }
 
     if (path === '/api/state' && method === 'GET') {
-      return sendJson(res, 200, this.state.snapshot());
+      return sendJson(res, 200, { ...this.state.snapshot(), analysis: this.state.report });
     }
 
     // ── 连接 ────────────────────────────────────────────────────────────
@@ -297,6 +297,37 @@ export class AppServer {
       this.state.setSongOffset(b.id, b.offsetMs);
       return sendJson(res, 200, { ok: true });
     }
+    // ── 分析（R2 结构体检） ─────────────────────────────────────────────
+    if (path === '/api/analyze' && method === 'POST') {
+      const b = (await ctx.body()) as { maxCuesPerPlayback?: number };
+      try {
+        const report = await this.state.analyzeShow(
+          b.maxCuesPerPlayback !== undefined ? { maxCuesPerPlayback: b.maxCuesPerPlayback } : {},
+        );
+        return sendJson(res, 200, report);
+      } catch (e) {
+        throw new HttpError(400, e instanceof Error ? e.message : String(e));
+      }
+    }
+    if (path === '/api/analyze/cuesheet' && method === 'GET') {
+      try {
+        const md = this.state.cueSheetMarkdown(ctx.url.searchParams.get('title') ?? undefined);
+        res.writeHead(200, {
+          'Content-Type': 'text/markdown; charset=utf-8',
+          'Content-Disposition': 'attachment; filename="cue-sheet.md"',
+          'Cache-Control': 'no-store',
+        });
+        res.end(md);
+        return;
+      } catch (e) {
+        throw new HttpError(400, e instanceof Error ? e.message : String(e));
+      }
+    }
+    if (path === '/api/analyze/inventory' && method === 'GET') {
+      if (!this.state.inventory) throw new HttpError(404, '还没有读取过 show');
+      return sendJson(res, 200, this.state.inventory);
+    }
+
     if (path === '/api/show/marks' && method === 'DELETE') {
       const song = this.state.currentSong;
       if (!song) throw new HttpError(404, '尚未选择曲目');

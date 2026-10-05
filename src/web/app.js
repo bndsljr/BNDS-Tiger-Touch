@@ -526,6 +526,91 @@ function renderStats() {
   }
 }
 
+// ── 结构体检（R2） ────────────────────────────────────────────────────────
+
+const SEVERITY_LABEL = { high: '严重', medium: '中等', low: '提示' };
+
+function renderAnalysis() {
+  const root = $('#analysis-result');
+  const report = state.analysis;
+  if (!report) {
+    root.innerHTML =
+      '<div class="empty">还没有体检过 —— 连接控台后点上面的「读取并体检」。</div>';
+    $('#btn-cuesheet').disabled = true;
+    return;
+  }
+  $('#btn-cuesheet').disabled = false;
+
+  const s = report.summary;
+  const sev = report.countsBySeverity;
+  const parts = [];
+
+  parts.push(`<div class="stats" style="margin-bottom:14px">
+    <div class="stat"><div class="label">灯具</div><div class="value">${s.fixtures}</div></div>
+    <div class="stat"><div class="label">编组</div><div class="value">${s.groups}</div></div>
+    <div class="stat"><div class="label">调色板</div><div class="value">${s.palettes}</div></div>
+    <div class="stat"><div class="label">回放</div><div class="value">${s.playbacks}</div></div>
+    <div class="stat"><div class="label">散 cue</div><div class="value">${s.memories}</div></div>
+    <div class="stat"><div class="label">多步 cue list</div><div class="value">${s.cuelists}</div></div>
+    <div class="stat"><div class="label">cue 总数</div><div class="value">${s.totalCues}</div></div>
+    <div class="stat"><div class="label">读取往返次数</div><div class="value">${report.requestsUsed}</div></div>
+  </div>`);
+
+  parts.push(`<div class="row" style="margin-bottom:10px">
+    <span class="badge ${sev.high ? 'bad' : ''}">严重 ${sev.high}</span>
+    <span class="badge ${sev.medium ? 'warn' : ''}">中等 ${sev.medium}</span>
+    <span class="badge">提示 ${sev.low}</span>
+    <span class="badge" style="margin-left:auto">发现方式：${report.discovery === 'bulk' ? '批量句柄端点' : '不可用'}</span>
+  </div>`);
+  parts.push(`<p class="hint">${escapeHtml(report.discoveryNote)}</p>`);
+
+  if (report.findings.length === 0) {
+    parts.push('<div class="empty">没有发现结构性问题。</div>');
+  } else {
+    const table = document.createElement('table');
+    const tbody = document.createElement('tbody');
+    for (const f of report.findings) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><span class="badge ${f.severity === 'high' ? 'bad' : f.severity === 'medium' ? 'warn' : ''}">${
+          SEVERITY_LABEL[f.severity]
+        }</span></td>
+        <td><b>${escapeHtml(f.title)}</b><br><span style="color:var(--fg-dim);font-size:13px">${escapeHtml(
+          f.detail,
+        )}</span></td>
+        <td style="color:var(--fg-dim);font-size:13px">${escapeHtml(f.suggestion)}</td>
+        <td class="mono" style="font-size:12px;color:var(--fg-faint)">${escapeHtml(f.where)}</td>`;
+      tbody.append(tr);
+    }
+    table.innerHTML = `<thead><tr><th>级别</th><th>问题</th><th>建议</th><th>位置</th></tr></thead>`;
+    table.append(tbody);
+    const wrap = document.createElement('div');
+    wrap.className = 'card';
+    wrap.style.padding = '0';
+    wrap.append(table);
+    parts.push(wrap.outerHTML);
+  }
+
+  // 明确写出"做不到什么" —— 避免被误读为已全面检查
+  parts.push(`<div class="card">
+    <h3 style="margin-top:0">本次体检<u>不</u>包含</h3>
+    <ul style="margin:0;padding-left:20px;color:var(--fg-dim);font-size:14px;line-height:1.9">
+      ${report.limitations.map((l) => `<li>${escapeHtml(l).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')}</li>`).join('')}
+    </ul>
+  </div>`);
+
+  if (report.warnings.length > 0) {
+    parts.push(`<div class="card">
+      <h3 style="margin-top:0">读取过程中的提示</h3>
+      <ul style="margin:0;padding-left:20px;color:var(--fg-dim);font-size:14px">
+        ${report.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}
+      </ul>
+    </div>`);
+  }
+
+  root.innerHTML = parts.join('');
+}
+
 // ── 完整渲染 ──────────────────────────────────────────────────────────────
 
 function renderAll() {
@@ -537,6 +622,7 @@ function renderAll() {
   renderTransport();
   renderRuler();
   renderStats();
+  renderAnalysis();
   $('#selected-count').textContent = `已选 ${selectedCueIds.size} 个用于标记`;
 }
 
@@ -727,6 +813,36 @@ $('#song-select').addEventListener('change', async (ev) => {
   }
 });
 
+// ── 结构体检按钮 ──────────────────────────────────────────────────────────
+
+$('#btn-analyze').addEventListener('click', async () => {
+  const btn = $('#btn-analyze');
+  const badge = $('#analyze-progress');
+  btn.disabled = true;
+  badge.textContent = '读取中…';
+  badge.className = 'badge warn';
+  try {
+    const max = Number($('#analyze-max-cues').value) || 60;
+    const report = await post('/api/analyze', { maxCuesPerPlayback: max });
+    badge.textContent = `完成 · 发现 ${report.findings.length} 个问题`;
+    badge.className = 'badge ok';
+    toast(
+      `体检完成：严重 ${report.countsBySeverity.high}、中等 ${report.countsBySeverity.medium}、提示 ${report.countsBySeverity.low}`,
+      'ok',
+    );
+  } catch (e) {
+    badge.textContent = '失败';
+    badge.className = 'badge bad';
+    toast(`体检失败：${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#btn-cuesheet').addEventListener('click', () => {
+  window.open('/api/analyze/cuesheet', '_blank');
+});
+
 // ── SSE 与启动 ────────────────────────────────────────────────────────────
 
 function connectEvents() {
@@ -761,7 +877,14 @@ function connectEvents() {
     }, 600);
   });
 
-  for (const name of ['connection', 'cuebank', 'songs', 'song-loaded', 'marks']) {
+  es.addEventListener('analyze-progress', (ev) => {
+    const p = JSON.parse(ev.data);
+    const badge = $('#analyze-progress');
+    badge.textContent = p.message;
+    badge.className = 'badge warn';
+  });
+
+  for (const name of ['connection', 'cuebank', 'songs', 'song-loaded', 'marks', 'analysis']) {
     es.addEventListener(name, async () => {
       state = await api('/api/state');
       renderAll();
