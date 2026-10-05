@@ -1,0 +1,19 @@
+# 本地 API 文档语料库（用 tools/fetch_titan_api_docs.py 生成，不入库）
+.cache/
+
+# Node
+node_modules/
+dist/
+build/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
