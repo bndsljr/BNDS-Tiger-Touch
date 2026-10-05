@@ -675,3 +675,165 @@ Playbacks/CueList/CreateCueList → Playbacks/StoreCue → Playbacks/GetPlayback
 | 本地控台 | `127.0.0.1:4430` 无响应 |
 
 > 结论：**本机既无控台也无官方模拟器**，`titan-sim` 是本项目必需的开发基础设施。
+
+---
+
+## 8. 🔴 五条硬真相（第五轮调研补充，含社区实测与厂方文档）
+
+### 8.1 💣 文档自身的 `levelDelta` 大小写地雷（**最高优先级**）
+| 写法 | 语料中出现次数 |
+|---|---|
+| `leveldelta`（小写 d） | **41**（19 页，形式为 `level_leveldelta` / `value_leveldelta`） |
+| `levelDelta`（大写 D） | **0** |
+
+**但社区实测：小写 d 会抛类型转换错误** ——
+`Error: Das Objekt mit dem Typ "System.Boolean" kann nicht in den Typ "Avolites.Menus.Maths.LevelAdjust" konvertiert werden.`
+实际可用形式是 **`level_levelDelta`（大写 D）**。
+
+**我方独立佐证**：全语料所有 `<参数名>_<变体>` 后缀**清一色是 camelCase** ——
+`_titanId`(596)、`_userNumber`(511)、`_location`(419)、`_handleList`(132)、
+`_userNumberList`(128)、`_level`(49)，**唯独 `_leveldelta`(22) 全小写**。
+它是唯一的异类，且 C# 联合类型成员名是 `LevelDelta`。
+→ **几乎可以确定是文档生成器的大小写 bug。**
+
+**对策**：客户端**默认发大写 D**，失败则回退小写并记录哪一种生效。
+**绝不可直接从语料生成代码** —— 那样会 100% 发出错误的电平调用，且静默失效。
+
+### 8.2 句柄分组名权威清单（18 个）
+| Group id | 含义 |
+|---|---|
+| `Playbacks` | 主推子句柄 |
+| `StaticPlaybacks` | **Tiger Touch 右上角推子**；第二行 = 静态句柄 11–20 |
+| `RollerA` | **Tiger Touch 滚轮的奇数页** |
+| `RollerB` | **Tiger Touch 滚轮的偶数页** |
+| `Macros` | 宏窗口 **以及 Tiger Touch 上 10 个专用宏/执行键**（硬链到当前页 1–10） |
+| `Fixtures` / `Groups` / `Workspaces` | 对应窗口 |
+| `Colours` / `Positions` / `Beams` / `Media` / `Effects` | 调色板类窗口 |
+| `Presets` / `PresetFlashes` | Pearl Expert / Sapphire Touch 的上排推子与其闪光键 |
+| `PlaybackWindow` | Playbacks 窗口 |
+| `MobileWingAPlaybacks` / `MobileWingAExecutor` | Titan Mobile 推子翼 |
+| （另见 `Unassigned`，`Layouts` 可能） | |
+
+> ⚠️ **两套命名空间不要混淆**：错误信息里的内部 id 是**另一种 camelCase** 拼写，
+> 例如 `Error: Unable not find handle in group 'playbackHandle' with index '23350'.`
+> —— 是 `playbackHandle`，不是 `Playbacks`。
+
+⚠️ 文档自带的示例用小写 `playback`，**不在权威清单内**。
+社区实战一律用大写规范名（`Colours_1_5`、`Presets_1_6`、`PlaybackWindow_1_1`）。
+→ **优先用大写规范名，小写行为需实测。**
+
+### 8.3 `handle=` 的隐式默认是陷阱
+社区实测：`handle=` 缺省被当作 **userNumber**，且**遇到 location 会失败** ——
+`KillPlayback?handle=Presets_1_6` → `Error: Failed to parse value to AcwUserNumber`。
+
+**对策**：**永远显式写后缀**，绝不依赖 `handle=` 的默认推断。
+泛型 `Handles.*` 场景用字符串记法 `cueHandleUN=1` / `playbackHandleUN=10555`。
+
+### 8.4 ★ `TimecodeTime` 线格式 = **`HH:MM:SS:FF`**（已解，原为待实测项）
+社区实测：`SetCueTimecodeWithCueNumber?...&time=11:22:33:44`
+且被 `Timecode.GetTimecodeTimePart(time, index)`（index 0=时 1=分 2=秒 3=帧，
+**恰好四段**）交叉印证。
+
+> 文档把该参数渲染成 `time={}`，掩盖了一个**完全明确的 `HH:MM:SS:FF` 格式** ——
+> 这是文档缺陷，不是真实未知。**我方 §6 待确认表第 6 项据此关闭。**
+
+回读：`GET /titan/get/2/Timecode/Context/LiveTime`（**字符串**，可轮询）。
+备用构造：`Timecode.MakeTimecodeTime(h,m,s,f,disabled,frameRate)`。
+
+### 8.5 🔴 没有推送通道，只能轮询（已确认）
+`WebSocket` / `SignalR` / `LongPoll` / `SSE` / `Subscribe` 全语料**零命中**。
+
+⚠️ **两个看似事件机制的误区**：
+- `Timecode.Context.AddLiveTimeListener` —— 走**普通 GET 且返回 `Void`**，
+  它是**控台自身 UI 的内部引用计数**，**不是**客户端回调。
+- `Timecode.AsObservable` —— 是同步类型转换，不是订阅。
+- `Titan.StartPollingTitanNet` —— 内部 SLP 设备发现。
+
+**轮询成本**：`/titan/handles` 约 **177 B/句柄** → 2000 句柄 ≈ **350 KiB**，
+5000 句柄 ≈ **1 MiB**，而控台是**与 DMX 引擎共享时间的嵌入式 CPU**。
+
+**对策**：
+- 句柄全量只在**首次连接**拉一次并缓存；
+- 心跳只轮询**廉价标量**（`Show/ShowName`、`Show/LoadState`、`Timecode/Context/LiveTime`）；
+- **本项目自身** 服务端→浏览器 用 SSE 推送（这是我们自己的通道，不受此限）。
+
+### 8.6 错误契约
+- 格式：**纯文本** `Error: <原始 .NET 异常>`，且**语言跟随控台 UI 语言**
+  （中文控台会返回中文错误）
+- HTTP 畸形请求 → `400 Bad Request`
+- **空 body = 成功**
+- 语料中**零个** HTTP 状态码被文档化
+
+### 8.7 无认证 / 无 TLS / 无限速
+`authent` / `login` / `permission` / `CORS` 全语料零命中，也无 TLS。
+`AuthorCredentials`（菜单属性署名）、`Users`/`LockMode`（控台用户与锁屏）、
+`Titan.*Session*`（TitanNet 多控台）**全是红鲱鱼**，与 WebAPI 鉴权无关。
+→ **控台网络必须隔离**；本项目不在演出期间监听不可信网络。
+
+---
+
+## 9. ⚠️ 两个可能推翻前提的发现
+
+### 9.1 🔴 控台身份未确认 —— v16 可能装不上
+厂方文档（`avolites.com/end-of-product-support-v16`）明确：
+> *"version 16 and above will not work on the Pearl Expert, **original Tiger Touch**,
+> Tiger Touch Pro or the **first version of the Tiger Touch II**, Sapphire Touch and TitanNet Processor."*
+
+受影响机型含：**Tiger Touch II 序列号 2001–3065**、Tiger Touch Pro（全部）。
+这些机型**最高只能到 V15.1**。
+
+文档规模差异：15.0 有 **3535** 页参考，16.0 有 **3704** 页 —— **187 页不同**
+（16.0 新增 178、移除 9），其中包括整个 `Editor.Layouts.*` 家族。
+
+> **行动项（最高优先级）**：拿到控台**序列号**与
+> `GET /titan/get/2/System/SoftwareVersion` 的确切字符串。
+> - 若是原版 Tiger Touch / Tiger Touch Pro / TT II 序列 2001–3065 → **不可能是 v16**，
+>   需按 **15.x** 方法面对齐；
+> - 若是 TT II 序列 >3065 → 16.0 语料正确。
+> - 无论哪种，**客户端都要记录实际版本并在不匹配时明确报错**，
+>   而不是发出一堆看起来像拼写错误的 400。
+
+另注：v12+ 起需要 **AvoKey 加密狗**。
+
+### 9.2 🔴 WebAPI 是"另一个用户"，有**自己的 programmer**
+社区（avosupport.de wiki）原文：
+> *"the web API runs headless, with its own programmer and UI. Unfortunately this UI
+> cannot be accessed at all. That's why **any functions which work with the programmer
+> cannot be used in a meaningful way**"*
+>
+> *"the Web API is **regarded another user** by Titan. Hence, fixture selection done on
+> the console does not apply here."*
+
+**推论**：
+1. WebAPI 是 Titan 引擎上的**独立席位**，有自己的 programmer 与自己的灯具选中集；
+2. 因此"选灯 → 设属性 → 录 cue"这类流程**会与控台操作员打架**；
+3. 因此该 API **擅长"操作/回放"，不擅长"编程"**；
+4. 因此"用 API 批量生成整个 show"的诚实结论是：
+   **批量「装载」可行，批量「编程」不可行**（凡涉及属性数值者）。
+
+> ⚠️ **重要限定**：该社区说法可能来自较早的 Titan 版本，且语料确实暴露了完整的
+> `Programmer` provider（321 页，含 `SetAttributeLevel`、`SetBlind`、`TryCue` 等）。
+> **真相必须实测**。但架构上必须**容忍这条限制**。
+
+**对本项目的直接影响（重要）**：
+| 能力 | 依赖 programmer? | 可靠性 |
+|---|---|---|
+| 触发/熄灭散 cue（R3.3、R4） | ❌ | **高**（operate/replay） |
+| 音乐卡点推 cue（R4） | ❌ | **高** |
+| 读 show 结构（R2） | ❌ | **高** |
+| 批量设电平 / legend / 页面组织 | ❌ | **高** |
+| 从 programmer 录入新散 cue（R3.5） | ✅ | **待实测** |
+| 批量生成调色板/编组（R1.2） | ✅ | **待实测** |
+
+→ **架构决策：把"操作/回放"作为可靠核心先做扎实；
+"编程"类能力按待验证处理，并保证在其受限时系统仍完整可用。**
+
+### 9.3 有价值的社区先例
+- **Reaper → Titan 的 CSV 卡点导入**：4 次调用即可
+  （`DoesCueExist` → `AppendOrInsertPlaybackCue` → `SetCueLegend` →
+  `SetTimecodeWithCueNumber`），已被实际使用 —— **是最接近本项目的成熟模式**，
+  且**完全不碰 programmer 限制**。
+- Bitfocus Companion、Central Control 均有已发布的 Titan 集成。
+- Titan Simulator 是官方离线方案，但**需付费 AvoKey、仅 Windows**，
+  且会输出随机 DMX 干扰 —— **本机（macOS）无法使用**，故自建 `titan-sim` 仍是必需。
+- show 文件扩展名疑似 **`.d4z`**（zip，未验证）。
