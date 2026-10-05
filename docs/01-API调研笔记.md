@@ -85,31 +85,94 @@ PY
 | 协议 | HTTP |
 | 端口 | 4430 |
 | 基路径 | `/titan/` |
-| 读属性 | `GET /titan/get/2/<Provider>/<Property>` |
-| 写属性 | `POST /titan/set/2/<Provider>/<Property>`（请求体为裸值） |
+| 读属性 | `GET /titan/get/2/<Provider>/<Property>`（无查询串，目标全在路径里） |
+| 写属性 | `POST /titan/set/2/<Provider>/<Property>`（值在请求体） |
 | 调方法 | `GET /titan/script/2/<Provider>/<Method>?<params>` |
-| 句柄发现 | `GET /titan/handles`、`/titan/handles/<Group>`、`/titan/handles/<Group>/<pageIndex>` |
-| 响应 | JSON |
+| 错误契约 | 无效请求返回错误消息；`void` 方法**返回空 body，不是 JSON** |
 
-官方 Introduction 页给出的 `set` 示例中，请求带 `Postman-Token` 头，请求体就是裸值
-（例如 `False`）。
+> 🔴 **重要：官方 Introduction 页是过时的 Titan 14 材料，不可作为协议依据。**
+> 它的示例**不带 `/2/`**、用**按类型命名的参数键**
+> （`?string=playback&int=1&level=0.5&float=1.0&bool=false`），
+> 且自证过时：示例里控台返回 `"14.0"`、show 名为 `"V10 Demo Show"`、标注 Copyright 2021。
+>
+> **同一个方法在两处形状不兼容**：
+> | | 形式 |
+> |---|---|
+> | Introduction（旧） | `Playbacks/FirePlaybackAtLevel?titanId=1684&level=1.0&bool=false` |
+> | 16.0 参考页（权威） | `Playbacks/FirePlaybackAtLevel?handle_titanId=1895&level_level=1&alwaysRefire=true` |
+>
+> → **一律以版本化的 `/16.0/api/` 参考页为准。**
 
-### 2.1 版本前缀 `/2/` ✅
-对 3706 页逐一统计：
+### 2.1 版本前缀 `/2/` 是强制的 ✅
+对全量页面统计（无例外）：
 
 | 项 | 数量 |
 |---|---|
 | 总页数 | 3706 |
-| 用 `/titan/script/2/` | **2475** |
-| 用 `/titan/script/`（不带 2） | **0** |
-| 用 `/titan/get/2/` | 1202→1203 |
-| 完全没有 HTTP 示例的页 | **28** |
+| `titan/get/` URL 总数 | 1203 |
+| 其中**含** `/2/` 的 | **1203（全部）** |
+| `titan/set/` URL 总数 | 1203 |
+| 其中**含** `/2/` 的 | **1203（全部）** |
+| `titan/script/2` 出现次数 | 4349（**不存在**其他 script 版本） |
+| 完全没有 HTTP URL 的页 | **28** |
 
-那 28 页**全部是枚举/类型定义**（如 `AcwTimecodeSource`、`AcwFrameRate`），
-不是可调用方法。
+那 28 页是 **27 个 `Avolites.*` 枚举页 + `api/index.html`**，
+全是类型定义，不是可调用方法。
 
-> **结论：`/2/` 是 script/get/set 的统一形式，且不存在"仅宏可用"的方法 ——
-> 整个 API 面均可通过 HTTP 远程调用。**
+> **结论：`/2/` 是 get/set/script 的统一且强制形式；
+> 不存在"仅宏可用"的方法 —— 每个可调用方法与属性都有 HTTP URL。**
+> 文档里的 `Namespace:` / `Syntax MACRO` 行只是 C#/ActionScript 签名，**总是**伴随 HTTP 形式。
+
+### 2.1.1 🔴 真正的阻塞类：URL 存在但**参数构造不出来**
+`{...}={}` 里的空花括号表示**渲染器对该参数类型没有查询串编码方式**。
+
+| 指标 | 数量 |
+|---|---|
+| script URL 含裸对象占位 `={}` 的页 | **466** |
+| 其中同时给出可用长写形式（`handle_*` / `…_handleList` / `…_userNumberList`）的 | 39 |
+| **仍然只有对象形式 —— 按文档无法调用** | **427** |
+
+覆盖类型包括 `IMenu`、`MenuItem`、`HandleReferenceList`、`IEnumerable<FixtureHandle>`、
+`AcwRecordMask`、`Size`、`LayoutElementInformation`、`ShapeStateInfo`、
+`KeyValuePair<String,Object>`、`Timecode`、`MenuItemTag` 等。
+
+**通用解法：找该方法的"有类型兄弟"**。已找到的具体替换：
+
+| 被阻塞 | 改用 |
+|---|---|
+| `Programmer.Editor.Fixtures.SetControlValue?control={}` | `SetControlValueById?controlId=` 或 `SetControlValueByName?controlName=` |
+| `Group.CreateAutoGroup?handles={}` | **`Group.QuickCreateGroup(handle, userNumber, legend, iconId)`** |
+| `Group.SetGroupFixtureOrder?orders={}` | `Group.SetFixtureOrder(groupId, fixtureId, x, y, angle)` —— 每个灯具一次调用 |
+| `Palette.CreatePresetPalettes?fixtures={}&option={}` | **`Palette.QuickCreatePalette(...)`** —— 每个调色板一次 |
+| `Editor.Shapes.BlockShape?menuItem={}` | `Playbacks.SetCueBlockedShape?playbackId=&cueId=&shapeId=&blocked=` |
+| `Editor.KeyFrames.*?shapeHandle={}` | `Int32` id 版孪生方法（`shapeId={titanId}`） |
+
+### 2.2 参数编码模型 ✅
+统计全语料 `HTTP Example:` 行得到的变体后缀：
+
+```
+596  _titanId         511  _userNumber        419  _location     ← Handle 寻址
+132  _handleList      128  _userNumberList                   ← IEnumerable<Handle>
+ 49  _level            22  _leveldelta                       ← LevelAdjust
+```
+
+**规则 1：复合/联合类型展开为 `<参数名>_<变体>` 键。**
+- `LevelAdjust`（"替换 vs 增量"联合）→ `value_level=1`（绝对值）或 `value_leveldelta=0.5`（增量）
+- `Handle` → `handle_userNumber` / `handle_location` / `handle_titanId`
+- `IEnumerable<Handle>` → `handles_handleList` / `handles_userNumberList`
+
+**规则 2：普通标量保留自己的名字作为键** —— `alwaysRefire=true`、`updateOnly=false`。
+16.0 参考中**不存在**按类型命名的形式。
+
+> ⚠️ **两个占位符陷阱**：
+> 1. `{titanId}` **只是任何 `Int32` 的渲染形式**，不代表该值是 ID。
+>    例：`Group.SetGroupSize?groupId={titanId}&width={titanId}&height={titanId}` —— `width` 显然不是 ID。
+>    **不要从占位符名字推断语义。**
+> 2. `{userNumber}`（`AcwUserNumber` 类型）**从未有过字面量示例** —— 43 处全部保留占位符。
+>    而它落在关键路径上：`Group.StoreGroup`、`Group.QuickCreateGroup`、
+>    `Palette.QuickCreatePalette`、`Handles.GetHandleFromUserNumber` 等约 15 个方法都吃它。
+>    唯一证据是**过时 Introduction** 里的 `?userNumber=20`。
+>    → 按普通整数处理，**置信度中等，须尽早实测**。
 
 ### 2.2 特殊参数类型 ✅
 | 类型 | 形式 | 含义 |
@@ -139,11 +202,22 @@ SteppedPlaybacks   Timelines
 `PlaybackGroups.Selection.*`。
 示例 URL：`GET /titan/get/2/HandleOptions/Playbacks/ContextHandle`
 
-**(b) `handle_location` 记号** ✅ —— 全语料唯一示例是 `handle_location=playback_2_1`，
-即**小写单数** `playback`，而非 `Playbacks`。⚠️ 语法几乎可以确定是
-`<groupToken>_<page>_<index>`（page=2, index=1），佐证来自
-`Handles.GetHandle(String group, Int32 page, Int32 index)` 的参数顺序，
-但文档从未明说。
+**(b) `handle_location` 记号 —— 实际上不可用** 🔴
+`playback_2_1` 是**全语料 3706 页中唯一出现过的 location 字符串** ——
+它是文档生成器**硬编码的单个示例**，被复制到**每个** location 类参数名下（共 419 处）：
+
+```
+316  handle_location=playback_2_1
+ 13  shadowedHandle_location=playback_2_1
+  7  playbackGroupHandle_location=playback_2_1
+```
+
+更糟的是，生成器把这个示例泄漏到了**它不可能成立**的地方 ——
+`Palettes.Editor.SelectPalette` 的**调色板**参数也写作 `palette_location=playback_2_1`。
+
+**对策**：`handle_location` 应视为**不支持**，除非已连真控台实测出语法。
+一律用有真实字面量示例的 `handle_userNumber`（示例 `=6`）
+或 `handle_titanId`（示例 `=1895`）。
 
 **(c) `Handles.GetHandle(group, ...)` / `Playbacks.ReleasePlaybacksByGroup`** ✅ ——
 后者文档称 `groupNames` 是 *"a semicolon separated list of group names"*，
@@ -151,18 +225,28 @@ SteppedPlaybacks   Timelines
 
 **对策 —— 不要硬编码，运行时自省** ⚠️：
 ```
-GET /titan/script/2/Handles/GetGroup?handle_titanId=<已知ID>   → 返回真实分组名字符串
-GET /titan/script/2/Handles/GetPath?handle_titanId=<已知ID>    → 返回路径
+GET /titan/script/2/Handles/GetGroup?handle_userNumber=6   → 返回真实分组名字符串
+GET /titan/script/2/Handles/GetPath?handle_userNumber=6    → 返回路径
 GET /titan/script/2/Handles/GetTitanIdFromHandle?handle_titanId=<ID>
-GET /titan/script/2/Handles/IsAllowedGroup?groupName=<候选>    → 录制前校验候选名
+GET /titan/script/2/Playbacks/IsAllowedGroup?groupName=<候选>   → 录制前校验候选名
 ```
 - `Handles.GetGroup(handle)` ✅ 文档：*"group of a handle or "Null" if the handle is null"*
+  —— **这是唯一有文档的"回读分组名"方法，也是 `group={string}` 参数的官方 bootstrap**
 - `Playbacks.IsAllowedGroup(String groupName)` ✅ 文档：
   *"Determines whether playbacks are allowed to be recorded in the group supplied."*
   → 可在真正录制前**校验**候选分组名
 
 **做法**：先用确定无误的寻址方式（`handle_titanId` / `handle_userNumber`）拿到句柄，
 再回读它的分组名字符串，此后一律使用该字面量。
+
+> ⚠️ **关于 `GET /titan/handles`**：这个端点（以及介绍页的 JSON 响应示例、
+> `{"handleLocation":{"group":"Fixtures",...}}`）**只出现在过时的 Introduction 里**，
+> 在 16.0 参考页中**出现次数为 0**，属**未验证**能力。
+> 它很可能仍然存在（正好能干净地解决分组名发现问题），
+> **值得连真控台时优先探测**，但**不能作为设计前提**。
+> 注意其示例用的是 `Colours` 而非 `Colour` —— 暗示分组名
+> **大小写敏感且可随控台配置变化**（介绍页原文："capital letters in the group name
+> must match what is set on the console"）。
 
 > 补充：`AcwRecordMask` 文档列出属性组 `I P C G B E S FX Time`；
 > `AttributeBankNames` 为 IPCGBES。调色板分组名（Colours/Positions/Gobos）
@@ -504,8 +588,9 @@ GET /titan/script/2/Command/RunCommand?command=<Titan 命令行语法>
 | 1 | `script/` 响应体的**线格式**（JSON？XML？带引号？） | 决定整个客户端解析层 | 调 `UserMacros/ExportXml` 看原始响应 |
 | 2 | `Reports.GenerateReport` 的 `format`（`ExportType`）取值 | 决定 R2 报告路线可用性 | 试调，观察返回/报错 |
 | 3 | 报告能否取出，还是只落控台本地盘 | 决定 R2 工作量 | 调 `SelectDevice` 后查有无下载端点 |
-| 4 | 合法句柄分组名字符串全集 | 寻址正确性 | `Handles/GetGroup` 回读；或 `GET /titan/handles` 后统计 `handleLocation.group` |
-| 5 | `handle_location` 各段语义（确认是否 `<group>_<page>_<index>`） | 寻址正确性 | 交叉比对 `titanId` 与 location |
+| 4 | 合法句柄分组名字符串全集 | 寻址正确性 | `Handles/GetGroup?handle_userNumber=6` 回读 |
+| 4b | `GET /titan/handles` 端点在 16.0 是否仍存在 | 分组名发现能否走捷径 | 直接请求看是否返回 JSON（介绍页有、参考页零命中） |
+| 5 | 非 playback 的 `handle_location` 语法 | 是否只能用 titanId | 交叉比对 `titanId` 与 location |
 | 6 | `TimecodeTime` 的 `time={}` **线格式** | 决定能否写时码 | 探测 `Timecode/MakeTimecodeTime`；或读手工 cue 的 `Playbacks/Editor/Timecode/CueTimecode` |
 | 7 | MTC 是否可作时码源（文档只列 Smpte） | 决定 R4 路线 A 成本 | `Timecode/AvailableSources`；试 MIDI 输入 |
 | 8 | 支持的 DAW 标记映射列表 + CSV 格式 | 决定 R4.3 是否走 CSV | `Timelines/MarkerMappingList()` + `PopulateMarkerMappingList` |
@@ -514,6 +599,10 @@ GET /titan/script/2/Command/RunCommand?command=<Titan 命令行语法>
 | 11 | `Titan.SyncNow()` 能否作为绕过文件通道的同步路径 | 备选注入架构 | 主从配置后试调 |
 | 12 | 未文档化的枚举：`SetRecordType` / `masterType` / `LockStates` / `HandleOperations` / `MenuEventTypes` | 各功能细节 | 逐项试调 |
 | 13 | Tiger Touch 实际 Titan 版本与功能授权 | 决定 timecode/timeline 可用性 | `System/SoftwareVersion`、`Titan/DeviceInfo` |
+| 14 | **`POST` set 的请求体编码**（裸值 / JSON / 表单） | **所有写属性操作** | 对一个无害属性各试一种 |
+| 15 | **`AcwUserNumber` 是否普通整数** | 约 15 个关键方法 | 试 `Group/StoreGroup?userNumber=99`（43 处占位符零字面量示例） |
+| 16 | 盲编是否真的抑制 DMX 输出 | R1.5 行为预期 | 开盲编后观察实际输出 |
+| 17 | 427 个对象参数方法的替代映射是否齐全 | 实现工作量 | 按 §2.1.1 对照表逐个验证 |
 
 ## 6.1 音乐卡点专项结论（已核实）
 
