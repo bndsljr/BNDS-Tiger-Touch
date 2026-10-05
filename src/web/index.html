@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BNDS 剧场灯光控制</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header>
+      <div class="brand">BNDS 剧场灯光<small>Tiger Touch V16</small></div>
+
+      <nav class="tabs" role="tablist" aria-label="工作域">
+        <button role="tab" data-tab="prepare" aria-selected="true">准备</button>
+        <button role="tab" data-tab="perform" aria-selected="false">演出</button>
+        <button role="tab" data-tab="review" aria-selected="false">复盘</button>
+      </nav>
+
+      <div class="status">
+        <span id="conn-status"><span class="dot"></span><span>未连接</span></span>
+        <span id="show-name" class="badge"></span>
+      </div>
+    </header>
+
+    <main>
+      <!-- ══════════════ 准备域 ══════════════ -->
+      <section role="tabpanel" id="tab-prepare" class="active">
+        <h2>准备</h2>
+        <p class="hint">
+          所有会改变数据结构的操作都在这里。演出域不放任何编辑按钮 —— 避免演出中误操作。
+        </p>
+
+        <!-- 连接 -->
+        <div class="card">
+          <h3 style="margin-top: 0">① 连接控台</h3>
+          <div class="row">
+            <label class="field" style="flex: 1 1 260px">
+              控台地址
+              <input id="console-url" type="text" placeholder="http://192.168.1.50:4430" />
+            </label>
+            <button class="btn primary" id="btn-connect">连接</button>
+            <button class="btn" id="btn-sim">用本地模拟器</button>
+            <button class="btn" id="btn-disconnect">断开</button>
+          </div>
+          <p class="hint" style="margin-bottom: 8px">
+            未连接时一切照常可编辑、可预演，只是推 cue 不会真的送到控台。
+          </p>
+          <dl class="kv" id="conn-detail"></dl>
+        </div>
+
+        <!-- 变光台 -->
+        <div class="card">
+          <h3 style="margin-top: 0">② 散 cue 库（变光台）</h3>
+          <p class="hint">
+            每个变光状态是<b>一个独立的 playback</b>，不是 cue list。
+            人可以随时单独推任意一个，系统也能在卡点时刻推 —— 两者互不干扰。
+          </p>
+          <div class="row" style="margin-bottom: 12px">
+            <label class="field">
+              新增到第几页
+              <input id="new-cue-page" type="number" value="1" min="1" style="width: 90px" />
+            </label>
+            <label class="field" style="flex: 1 1 220px">
+              名称
+              <input id="new-cue-name" type="text" placeholder="例如：侧光强化" />
+            </label>
+            <button class="btn" id="btn-add-cue">新增散 cue</button>
+            <div class="sep"></div>
+            <button class="btn" id="btn-resolve">解析控台句柄</button>
+          </div>
+          <div id="cuebank-editor"></div>
+        </div>
+
+        <!-- 卡点表 -->
+        <div class="card">
+          <h3 style="margin-top: 0">③ 音乐卡点表</h3>
+          <p class="hint">
+            点「播放」时，音乐与推散 cue 由<b>同一个时钟</b>驱动。
+            播放中按「在此刻标记」即可边听边标。
+          </p>
+          <div class="row" style="margin-bottom: 12px">
+            <label class="field" style="flex: 1 1 220px">
+              曲目
+              <select id="song-select"></select>
+            </label>
+            <label class="field" style="flex: 1 1 240px">
+              音频路径（相对 /audio/，可留空先排卡点）
+              <input id="song-audio" type="text" placeholder="序曲.mp3" />
+            </label>
+            <label class="field">
+              时长（秒）
+              <input id="song-duration" type="number" min="0" step="1" style="width: 110px" />
+            </label>
+            <button class="btn" id="btn-save-song">保存曲目</button>
+            <button class="btn" id="btn-new-song">新建曲目</button>
+            <button class="btn danger" id="btn-delete-song">删除</button>
+          </div>
+          <div id="marks-editor"></div>
+        </div>
+      </section>
+
+      <!-- ══════════════ 演出域 ══════════════ -->
+      <section role="tabpanel" id="tab-perform">
+        <h2>演出</h2>
+        <p class="hint">
+          这一页只做「推 cue」和「播放」。没有任何会改动数据的按钮。
+          控台侧同样可以随时人工干预，系统不会反向覆盖。
+        </p>
+
+        <div class="console-bar">
+          <div class="clock">
+            <span id="clock-pos">00:00.000</span>
+            <small id="clock-state">已停止</small>
+            <span class="next" id="clock-next"></span>
+          </div>
+
+          <div class="row">
+            <button class="btn primary" id="btn-play" style="min-width: 110px; padding: 14px 22px">
+              ▶ 播放
+            </button>
+            <button class="btn" id="btn-pause" style="padding: 14px 18px">暂停</button>
+            <button class="btn" id="btn-stop" style="padding: 14px 18px">停止</button>
+          </div>
+
+          <div class="sep"></div>
+
+          <label class="field">
+            整曲偏移（ms）
+            <input id="offset-input" type="number" step="10" value="0" style="width: 110px" />
+          </label>
+          <button class="btn" id="btn-apply-offset">应用</button>
+
+          <div class="sep"></div>
+
+          <button class="btn danger" id="btn-killall" style="padding: 14px 18px">
+            全部熄灭
+          </button>
+        </div>
+
+        <div class="card">
+          <div class="row">
+            <div class="progress"><i id="progress-fill"></i></div>
+            <span class="badge" id="now-playing">未选择曲目</span>
+          </div>
+          <div class="ruler" id="ruler"></div>
+          <p class="hint" style="margin-bottom: 0">
+            黄线 = 卡点，蓝线 = 播放头。点击标尺可跳转。
+          </p>
+        </div>
+
+        <audio id="audio" style="display: none"></audio>
+
+        <h3>
+          散 cue 台
+          <span class="badge" id="selected-count">已选 0 个用于标记</span>
+        </h3>
+        <p class="hint">
+          单击 = 推起（触发）；再次单击同一 cue = 重新触发。
+          按住 Shift 单击 = 熄灭。在准备域勾选后可「在此刻标记」。
+        </p>
+        <div class="cue-pages" id="perform-cuebank"></div>
+
+        <div class="card" style="margin-top: 16px">
+          <h3 style="margin-top: 0">快速标记</h3>
+          <div class="row">
+            <button class="btn primary" id="btn-mark-now">在此刻标记选中的散 cue</button>
+            <input id="mark-note" type="text" placeholder="备注（可选，例如：副歌进入）" style="flex: 1 1 240px" />
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════════ 复盘域 ══════════════ -->
+      <section role="tabpanel" id="tab-review">
+        <h2>复盘</h2>
+        <p class="hint">
+          把「卡点准不准」从感觉变成数据。人工触发不计入精度统计，否则会污染指标。
+        </p>
+
+        <div class="stats" id="stats"></div>
+
+        <h3>触发记录</h3>
+        <div class="card" style="padding: 0">
+          <table>
+            <thead>
+              <tr>
+                <th>时刻</th>
+                <th class="mono">计划</th>
+                <th class="mono">实际</th>
+                <th class="mono">偏差</th>
+                <th>散 cue</th>
+                <th>来源</th>
+                <th>备注</th>
+              </tr>
+            </thead>
+            <tbody id="hit-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <div id="toasts"></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
