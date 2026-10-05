@@ -59,14 +59,14 @@ python3 tools/fetch_titan_api_docs.py --version 16.0 --out .cache/api-docs
 | 文件 | 内容 |
 |---|---|
 | `.cache/api-docs/index.json` | docfx 原始搜索索引 |
-| `.cache/api-docs/ALL.txt` | 3705 页全文，块以 `@@@ <page>` 分隔 |
+| `.cache/api-docs/ALL.txt` | 3706 页全文，块以 `@@@ <page>` 分隔 |
 | `.cache/api-docs/pages.txt` | 页面路径清单 |
 | `.cache/api-docs/summary.md` | 统计信息 |
 
 **原理**：`https://api.avolites.com/16.0/index.json` 是 docfx 生成的搜索索引，
 其 `keywords` 字段包含**每个 API 页面的完整正文**（描述、命名空间、C#/MACRO 签名、
 HTTP URL 模板、全部参数说明）。因此一次请求即可获得全站内容，
-无需逐页抓取 3705 次。
+无需逐页抓取 3706 次。
 
 ```bash
 # 典型检索方式
@@ -95,11 +95,11 @@ PY
 （例如 `False`）。
 
 ### 2.1 版本前缀 `/2/` ✅
-对 3705 页逐一统计：
+对 3706 页逐一统计：
 
 | 项 | 数量 |
 |---|---|
-| 总页数 | 3705 |
+| 总页数 | 3706 |
 | 用 `/titan/script/2/` | **2475** |
 | 用 `/titan/script/`（不带 2） | **0** |
 | 用 `/titan/get/2/` | 1202→1203 |

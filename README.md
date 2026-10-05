@@ -56,7 +56,7 @@
 
 ## 常用命令
 
-抓取 Titan API 全量文档为本地可检索语料库（约 3705 个方法页）：
+抓取 Titan API 全量文档为本地可检索语料库（约 3706 个方法页）：
 
 ```bash
 python3 tools/fetch_titan_api_docs.py --version 16.0 --out .cache/api-docs
